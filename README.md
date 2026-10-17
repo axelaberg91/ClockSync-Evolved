@@ -1,68 +1,65 @@
-# clocksync (v1.3.1)
+# clocksync — Atom Lite DCF77
 
-**ESP32 Fake Radio Clock Station**
+Sync a radio-controlled clock from Wi-Fi time using an M5Stack Atom Lite and a small wire coil. Control it from your browser or the Atom's button.
 
-`clocksync` allows an ESP32 to emulate various Low-Frequency (LF) time signal stations, allowing you to sync radio-controlled clocks (JJY, WWVB, DCF77, MSF, etc.) even if you are out of range of the actual transmitters.
+This fork adds a **printable coil former with an integrated Atom holder, resistor clip and Dupont connector guide**, with the working build described below. The software builds on [tanvach/clocksync](https://github.com/tanvach/clocksync), originally based on [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy).
 
-This project is a maintained fork of the original `nisejjy` project by SASAKI Taroh, customized for modern hardware (M5 Atom Lite, ESP32-S3) with improved Web UI, stability, and signal framing.
+## Get started
 
-### What's New in v1.3.1
+1. **Build:** [download the print pack](hardware/print/clocksync-atom-lite-print-pack.zip?raw=true) and follow the short guide below.
+2. **Install:** [set up Wi-Fi and upload the firmware](#firmware-setup).
+3. **Use:** open `http://clocksync.local` or the device's IP, select **DCF77** and **GPIO32**, and place your clock close to the coil. The Atom button toggles transmission.
 
-- **Prevent NVS flash wear**: Added `WiFi.persistent(false)` to stop the WiFi library from writing credentials to flash on every connect/disconnect cycle.
-- **Buzzer default off**: Buzzer now defaults to off on fresh install and reset.
-- **Tristate radio pin when TX off**: Radio output pin is now set to high-impedance (INPUT) when TX is disabled or when switching pins, instead of being driven LOW.
+## Build the Atom Lite unit
 
-### What's New in v1.3
+**Printed, fitted and tested by Axel:** M5Stack Atom Lite, **20 turns of 0.5 mm enamelled copper wire**, and a **330 ohm series resistor**.
 
-- **Fix WWVB DST bits**: Changed default TZ from `"UTC0"` to `"PST8PDT,M3.2.0,M11.1.0"`. With `"UTC0"`, DST status bits were always 0, causing clocks to stay on standard time after DST started. Updated documentation and status display to clarify that WWVB DST bits are derived from the TZ setting.
-- **Remove dead `q` command**: Removed unused `q0/q1/q2` WWVB pending override command and related dead code (`wwvbPendingOverride`, `getWWVBPendFlag`).
+![Coil former with integrated Atom holder](hardware/images/coil-preview.png)
 
-## Features
+### Download and print
 
-- **Multi-Station Support**: Emulates JJY (Japan), WWVB (USA), DCF77 (Germany), MSF (UK), BSF (Taiwan), and BPC (China).
-- **Web Control**: Simple web interface for status monitoring and configuration.
-- **Home Assistant Integration**: REST API for scheduling transmission (e.g., run only at night).
-- **Precise Timing**: Uses ESP32 hardware timers for accurate carrier generation and modulation.
-- **OTA Updates**: Update firmware wirelessly via Arduino IDE.
+**[Download the print pack](hardware/print/clocksync-atom-lite-print-pack.zip?raw=true)**, extract it and open `print/print-both.3mf` in your slicer. The pack contains both parts, editable CAD and these build instructions.
 
-## Getting Started
+Individual files: [coil STL](hardware/coil/coil-75mm-integrated-holder.stl) · [connector clip STL](hardware/connector/dupont-housing-clip.stl) · [both parts as 3MF](hardware/print/print-both.3mf).
 
-### 1. Hardware Setup
+For **Prusa CORE One / PLA**, start with a **0.4 mm nozzle, 0.12 mm layers, 4 perimeters, 20% gyroid, no supports**, at **100% scale**. Use your own printer/material profile. The 3MF contains geometry and placement, not G-code.
 
-**Supported Boards**:
-- **M5Stack Atom Lite** (Recommended): Works out of the box. The RGB LED indicates status, and the button toggles transmission.
-- **Generic ESP32 / ESP32-S3**: Compatible with standard DevKits.
+The coil former is **75 x 75 x 15 mm**. It includes the Atom snap holder and a side clip for the resistor. Print it as one part; no separate holder or glue is needed. The small connector clip is the second part.
 
-**Wiring Diagram**:
+### What you need
+
+| Item | Amount |
+| --- | --- |
+| M5Stack Atom Lite and USB-C cable | 1 each |
+| Enamelled copper wire, 0.5 mm | About 4.8 m including connection leads |
+| Axial resistor, 330 ohm / 0.25 W | 1 |
+| Jumper leads with complete single-pin Dupont female housings | 2 |
+| Heat-shrink tubing | For the resistor and solder joints |
+
+### Assemble and connect
+
+1. Let the print cool, then snap the Atom into the holder with USB-C and Grove facing the large open area inside the coil. The button remains accessible.
+2. Leave about 20 cm at each end and wind **20 turns** around the outside of the core. A convenient arrangement is **15 turns in the first layer, then 5 in the second**. Keep the same rotational direction around the coil. Route both leads through the single exit to the inside.
+3. With USB disconnected, remove enamel from the wire ends, solder the series circuit below and insulate the joints. Let the sleeved resistor cool before snapping it into the side clip. The clip accepts a sleeved diameter of about 3.0-3.4 mm.
+
 ```text
-           ESP32 / M5Atom
-          +-------------+
-          |             |
-          |     GND [ ]----(Resistor 220-330Ω)----+
-          |             |                         |
-          | GPIO 32 [ ]-----------------+         |
-          |             |               |         |
-          +-------------+               |         |
-                                   [ Antenna ]    |
-                                   [  Coil   ]    |
-                                        |         |
-                                        +---------+
+Grove G32 (GPIO32) ---- coil ---- 330 ohm resistor ---- Grove GND
 ```
 
-1.  **Pin**: Connect one end of your antenna to `GPIO 32` (default).
-    *   *Note*: On M5Stack Atom Lite, this is a pin on the bottom header.
-2.  **Ground**: Connect the other end of the antenna to a **Current Limiting Resistor** (220Ω - 330Ω), and then to `GND`.
-    *   *Why a resistor?* It protects your ESP32 from drawing too much current, as the antenna coil has very low resistance.
-3.  **Antenna Types**:
-    *   **Ferrite Rod (Recommended)**: Scavenge one from an old radio clock or buy a ferrite antenna tuned to your target frequency. **Important**: You must match the frequency! (Tested range > 1m)
-        *   **60 kHz**: For WWVB (USA), MSF (UK), JJY (Japan).
-        *   **40 kHz**: For JJY (Japan).
-        *   **77.5 kHz**: For DCF77 (Germany), BSF (Taiwan).
-        *   **68.5 kHz**: For BPC (China).
-    *   **Wire Loop**: A simple coil of wire (e.g., 30 turns of magnet wire around a water bottle). Short range, but works for any frequency.
-4.  **Placement**: Place your target watch/clock **inside** or **immediately next to** the antenna coil. This is a low-power near-field emulator; range is typically < 10cm.
+Use **G32 and GND, the two outer Grove positions below USB-C**. Leave the middle pins, **5V and G26**, unused. Identify pins from the [Atom Lite pin map](https://docs.m5stack.com/en/core/Atom-Lite), not left/right in a picture.
 
-### 2. Software Configuration
+4. Fully seat the two complete Dupont females first, then snap the printed guide over their **rear ends**. Hook each housing under its inner lip, then press its outer edge into the clip. The front ends stay free so both contacts can bottom out. Check that the guide does not push either female back; grip the housings when unplugging.
+5. Check continuity through the coil and resistor, connect USB power, select **DCF77 (77.5 kHz)** and **GPIO32**, then start the receiving clock's synchronization procedure close to the coil. Adjust its position and orientation as needed.
+
+Axel's complete Dupont housings fit the Grove port; other housings can vary. Keep the 330 ohm resistor in series. Cable plugs and bends need space beyond the printed 15 mm height.
+
+## Firmware setup
+
+The current sketch uses Arduino IDE and a local `secrets.h` for Wi-Fi credentials. For this DCF77 build, use the POSIX time zone **`CET-1CEST,M3.5.0/2,M10.5.0/3`**. After uploading, open `http://clocksync.local` or the device's IP to configure and control it.
+
+<details>
+<summary>Installation, dependencies and other time zones</summary>
+
 1.  **WiFi Secrets**:
     *   Find the file `secrets_example.h` in the file list.
     *   **Duplicate** it and rename the copy to `secrets.h`.
@@ -113,14 +110,10 @@ This project is a maintained fork of the original `nisejjy` project by SASAKI Ta
         arduino-cli upload -p /dev/ttyUSB0 --fqbn m5stack:esp32:m5stack_atom clocksync.ino
         ```
 
-### 3. Usage
+</details>
 
-Once running, the device acts as a time signal transmitter.
-- **Status LED**: Indicates transmission is active.
-- **Button**: Press to toggle transmission ON/OFF.
-- **Web UI**: Visit `http://clocksync.local` (or the device IP) to view status.
-
-## Command Reference
+<details>
+<summary>Commands and other supported stations</summary>
 
 Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksync.local/cmd?c=<command>`).
 
@@ -161,23 +154,48 @@ Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksy
 | **BSF** | 77.5 | Taiwan | Quaternary encoding (uncertified). |
 | **BPC** | 68.5 | China | Quaternary encoding (uncertified). |
 
-## Troubleshooting
-*   **Clock isn't syncing**:
-    *   **Proximity**: Move the clock *closer* to the antenna. It usually needs to be touching.
-    *   **Interference**: LED power supplies and monitors cause noise. Move away from them.
-    *   **Volume**: Increase "Volume" (Drive Strength) to `g3` using the Serial/Web command.
-    *   **Antenna**: Ensure your antenna wire isn't broken and the resistor is secure.
-*   **Clock shows wrong time**:
-    *   **Timezone**: Check the `#define TZ` line in `clocksync.ino`. For WWVB, use a US POSIX timezone (see setup step 2).
-    *   **DST off by 1 hour (WWVB)**: If TZ is set to `"UTC0"`, DST bits will always be 0 and your clock won't spring forward. Set TZ to your US timezone.
-*   **Compilation Error**:
-    *   `M5Atom.h: No such file`: You missed installing the M5Atom library in step 3.
+</details>
 
-## Technical Details
+If your clock does not sync, check the output pin, station, connector seating, enamel removal and continuity through the coil and resistor. Then move or rotate the clock close to the coil. The tested build uses 20 turns and 330 ohm.
 
-For deep dives into the signal encoding and protocol specifications used by this emulator, see [HOW_IT_WORKS.md](./HOW_IT_WORKS.md).
+## More details
+
+<details>
+<summary>CAD sources and design checks</summary>
+
+- [Coil OpenSCAD](hardware/coil/coil-75mm-integrated-holder.scad) · [connector clip OpenSCAD](hardware/connector/dupont-housing-clip.scad).
+- [Coil geometry report](hardware/coil/geometry-checks.json) · [connector geometry report](hardware/connector/geometry-checks.json).
+- The coil and clip are each one closed connected mesh. STL geometry matches the delivered designs. The combined plate was sliced in PrusaSlicer 2.9.6 without support or stability warnings.
+- Physical printing, fit and operation were confirmed by Axel with 20 turns and 330 ohm. Print settings above are a starting point for reproducing the build.
+- CAD has some fixed coordinates: recheck fit and slicing after editing dimensions.
+
+</details>
+
+<details>
+<summary>How the signal works and upstream firmware changes</summary>
+
+See [HOW_IT_WORKS.md](HOW_IT_WORKS.md) for protocol and timing details. Inherited firmware release notes (v1.3.1 and v1.3):
+
+- **Prevent NVS flash wear**: Added `WiFi.persistent(false)` to stop the WiFi library from writing credentials to flash on every connect/disconnect cycle.
+- **Buzzer default off**: Buzzer now defaults to off on fresh install and reset.
+- **Tristate radio pin when TX off**: Radio output pin is now set to high-impedance (INPUT) when TX is disabled or when switching pins, instead of being driven LOW.
+
+### What's New in v1.3
+
+- **Fix WWVB DST bits**: Changed default TZ from `"UTC0"` to `"PST8PDT,M3.2.0,M11.1.0"`. With `"UTC0"`, DST status bits were always 0, causing clocks to stay on standard time after DST started. Updated documentation and status display to clarify that WWVB DST bits are derived from the TZ setting.
+- **Remove dead `q` command**: Removed unused `q0/q1/q2` WWVB pending override command and related dead code (`wwvbPendingOverride`, `getWWVBPendFlag`).
+
+</details>
 
 ## Credits
 
-- **Original Author**: SASAKI Taroh (tarohs) - [nisejjy](https://github.com/tarohs/nisejjy)
-- **Reference**: [txtempus](https://github.com/hzeller/txtempus) by Henner Zeller (used for WWVB frame verification).
+Thanks to **[Tan Vachiramon](https://github.com/tanvach/clocksync)** for the clocksync base, **[SASAKI Taroh](https://github.com/tarohs/nisejjy)** for the original nisejjy project, and **[Henner Zeller](https://github.com/hzeller/txtempus)** for txtempus, an upstream signal-verification reference. The printable parts were developed for Axel's build with Codex assistance, starting from Axel's original coil-former concept.
+
+<details>
+<summary>Dimensional references and license status</summary>
+
+Hardware references: [M5Stack Atom Lite enclosure](https://github.com/m5stack/M5_Hardware/tree/master/Products/C008_Atom-Lite/Structures), [Pololu connector housing](https://www.pololu.com/product/1900) and [Grove connector drawing](https://statics3.seeedstudio.com/images/opl/datasheet/3470130P1.pdf). Reference meshes are not included.
+
+The inherited repository has no LICENSE file. Existing attribution is preserved; this addition does not relicense upstream code. A separate license for the new CAD has not been selected.
+
+</details>

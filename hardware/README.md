@@ -1,33 +1,50 @@
-# Atom Lite DCF77 build
+# Atom Lite print pack
 
-This is Axel's compact, printable hardware build for the [clocksync fork](https://github.com/axelaberg91/clocksync). It adds a 75 mm antenna former with an integrated Atom Lite snap holder and a separate clip for two complete Dupont female connectors.
+## Build the Atom Lite unit
 
-**Built and tested by Axel:** the parts have been printed, fitted and functionally tested. The working build uses **20 turns of 0.5 mm enamelled copper wire and a 330 ohm series resistor**. See the [validation record](VALIDATION.md).
+**Printed, fitted and tested by Axel:** M5Stack Atom Lite, **20 turns of 0.5 mm enamelled copper wire**, and a **330 ohm series resistor**.
 
-![Antenna former and integrated holder](images/coil-preview.png)
+![Coil former with integrated Atom holder](images/coil-preview.png)
 
-## Start here
+### Download and print
 
-1. Read the [parts, wiring and assembly guide](BUILD.md).
-2. Download [the complete print pack](print/clocksync-atom-lite-print-pack.zip), extract it, and open `print-both.3mf` in your slicer.
-3. Select your own printer and PLA profile, keep 100% scale, and check the preview before printing.
-4. Follow the firmware instructions in the repository's [main README](../README.md). Firmware work is maintained separately; this hardware addition does not change firmware or its release number.
+Open `print/print-both.3mf` in your slicer. Both parts, editable CAD and these build instructions are included.
 
-The combined 3MF contains two separate models in millimetres and their placement. It does not contain a printer profile or ready-to-run G-code.
+Individual files: [coil STL](coil/coil-75mm-integrated-holder.stl) · [connector clip STL](connector/dupont-housing-clip.stl) · [both parts as 3MF](print/print-both.3mf).
 
-## Files
+For **Prusa CORE One / PLA**, start with a **0.4 mm nozzle, 0.12 mm layers, 4 perimeters, 20% gyroid, no supports**, at **100% scale**. Use your own printer/material profile. The 3MF contains geometry and placement, not G-code.
 
-| File | Purpose |
+The coil former is **75 x 75 x 15 mm**. It includes the Atom snap holder and a side clip for the resistor. Print it as one part; no separate holder or glue is needed. The small connector clip is the second part.
+
+### What you need
+
+| Item | Amount |
 | --- | --- |
-| [Print pack ZIP](print/clocksync-atom-lite-print-pack.zip) | Both parts, editable sources, assembly guide and checksums |
-| [Combined 3MF](print/print-both.3mf) | Both parts placed separately for slicing |
-| [Coil STL](coil/coil-75mm-integrated-holder.stl) / [3MF](coil/coil-75mm-integrated-holder.3mf) | One part: coil former, Atom holder and resistor clip |
-| [Connector clip STL](connector/dupont-housing-clip.stl) / [3MF](connector/dupont-housing-clip.3mf) | Rear guide for two complete one-pin Dupont females |
-| [Coil OpenSCAD](coil/coil-75mm-integrated-holder.scad) / [clip OpenSCAD](connector/dupont-housing-clip.scad) | Editable CAD geometry |
-| [Validation status](VALIDATION.md) | What was checked and what still needs testing |
-| [Hardware changes](CHANGELOG.md) | Current design and superseded alternatives |
-| [Credits and provenance](CREDITS.md) | Upstream authors and dimensional references |
+| M5Stack Atom Lite and USB-C cable | 1 each |
+| Enamelled copper wire, 0.5 mm | About 4.8 m including connection leads |
+| Axial resistor, 330 ohm / 0.25 W | 1 |
+| Jumper leads with complete single-pin Dupont female housings | 2 |
+| Heat-shrink tubing | For the resistor and solder joints |
 
-Use the integrated holder version supplied here. A separate glue-on Atom holder, bare-contact adapters and front dummy plugs are not required for this build.
+### Assemble and connect
 
-The editable CAD uses constructive geometry with some fixed coordinates; changing a top-level dimension alone may not update every related feature. Recheck fit, mesh and slicing after an edit.
+1. Let the print cool, then snap the Atom into the holder with USB-C and Grove facing the large open area inside the coil. The button remains accessible.
+2. Leave about 20 cm at each end and wind **20 turns** around the outside of the core. A convenient arrangement is **15 turns in the first layer, then 5 in the second**. Keep the same rotational direction around the coil. Route both leads through the single exit to the inside.
+3. With USB disconnected, remove enamel from the wire ends, solder the series circuit below and insulate the joints. Let the sleeved resistor cool before snapping it into the side clip. The clip accepts a sleeved diameter of about 3.0-3.4 mm.
+
+```text
+Grove G32 (GPIO32) ---- coil ---- 330 ohm resistor ---- Grove GND
+```
+
+Use **G32 and GND, the two outer Grove positions below USB-C**. Leave the middle pins, **5V and G26**, unused. Identify pins from the [Atom Lite pin map](https://docs.m5stack.com/en/core/Atom-Lite), not left/right in a picture.
+
+4. Fully seat the two complete Dupont females first, then snap the printed guide over their **rear ends**. Hook each housing under its inner lip, then press its outer edge into the clip. The front ends stay free so both contacts can bottom out. Check that the guide does not push either female back; grip the housings when unplugging.
+5. Check continuity through the coil and resistor, connect USB power, select **DCF77 (77.5 kHz)** and **GPIO32**, then start the receiving clock's synchronization procedure close to the coil. Adjust its position and orientation as needed.
+
+Axel's complete Dupont housings fit the Grove port; other housings can vary. Keep the 330 ohm resistor in series. Cable plugs and bends need space beyond the printed 15 mm height.
+
+## Credits
+
+Hardware developed for Axel's build with Codex assistance. Software: [tanvach/clocksync](https://github.com/tanvach/clocksync), based on [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy); upstream reference: [txtempus](https://github.com/hzeller/txtempus).
+
+For firmware setup and the full project, see [the project homepage](https://github.com/axelaberg91/clocksync). CAD sources and geometry reports are included in `coil/` and `connector/`.
