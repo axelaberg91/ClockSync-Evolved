@@ -1,0 +1,9 @@
+*.md text eol=lf
+*.scad text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+.gitattributes text eol=lf
+*.stl binary
+*.3mf binary
+*.png binary
+*.zip binary

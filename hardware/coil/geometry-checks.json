@@ -1,0 +1,49 @@
+{
+  "original_size_mm": [
+    75.0,
+    74.9985,
+    3.0
+  ],
+  "new_size_mm": [
+    75.0,
+    75.0,
+    15.0
+  ],
+  "watertight": true,
+  "connected_solids": 1,
+  "volume_mm3": 13042.803,
+  "triangles": 7038,
+  "wire_diameter_design_mm": 0.5,
+  "winding_core_diameter_mm": 69,
+  "unobstructed_winding_height_mm": 8.8,
+  "radial_supports": 8,
+  "shared_inward_wire_exit_diameter_mm": 1.8,
+  "resistor_clip_wall_mm": 1.2,
+  "resistor_clip_pocket_diameter_mm": 3.4,
+  "resistor_clip_mouth_mm": 2.5,
+  "resistor_clip_length_mm": 5.5,
+  "resistor_clip_position_xy_mm": [
+    23,
+    -5
+  ],
+  "resistor_axis": "Y",
+  "resistor_overlap_with_center_cable_corridor_mm3": 0.0,
+  "maximum_overall_height_mm": 15,
+  "thirty_turns_layers": 2,
+  "turns_per_layer_for_30": 15,
+  "fifteen_turns_axial_height_mm": 7.5,
+  "recommended_initial_turns": 20,
+  "wire_length_20_turns_m": 4.383,
+  "wire_length_30_turns_m": 6.597,
+  "usb_edge_to_ring_inner_centerline_clearance_mm": 37.1,
+  "holder_radial_clearance_min_mm": 0.213,
+  "height_with_existing_holder_mm": 14.207,
+  "holder_to_spool_fusion_mm3": 453.66545,
+  "integrated_holder": true,
+  "holder_embed_depth_mm": 0.6,
+  "snap_arm_sweep_clearance_verified": true,
+  "atom_casing_overlap_mm3": 1.7e-06,
+  "physical_validation": "Builder reports printed parts, verified fit and successful operation.",
+  "tested_turn_count": 20,
+  "tested_series_resistor_ohm": 330
+}
