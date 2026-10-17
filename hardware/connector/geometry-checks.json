@@ -1,0 +1,30 @@
+{
+  "units": "mm",
+  "single_printed_solid": true,
+  "watertight": true,
+  "size_mm": [
+    10.64,
+    5.85,
+    4.1
+  ],
+  "nominal_dupont_housing_mm": [
+    2.54,
+    2.54,
+    14.0
+  ],
+  "outer_pin_spacing_mm": 6.0,
+  "housing_channel_width_mm": 2.84,
+  "side_clearance_mm": 0.15,
+  "body_front_y_mm": 9.5,
+  "backstop_y_mm": 14.35,
+  "exposed_housing_nose_nominal_mm": 9.15,
+  "minimum_exposed_nose_for_14_plusminus025_mm": 8.9,
+  "front_collar_or_pin_hole": false,
+  "housing_top_preload_nominal_mm": 0.04,
+  "user_verified_complete_housings_can_fully_enter_grove_without_adapter": true,
+  "volume_mm3": 129.609,
+  "triangles": 172,
+  "physical_validation": "Builder reports printed parts, verified fit and successful operation.",
+  "tested_turn_count": 20,
+  "tested_series_resistor_ohm": 330
+}
