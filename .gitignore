@@ -1,5 +1,6 @@
 # Secrets
 secrets.h
+secret.h
 
 # macOS
 .DS_Store

@@ -1,76 +1,43 @@
-//
-// clocksync.ino - ESP32 fake radio clock station
-//
-// Forked from 'nisejjy' by SASAKI Taroh (tarohs).
-// Maintained by Tanvach.
-//
-// See README.md for usage, hardware setup, and attribution.
-// See HOW_IT_WORKS.md for technical details on signal encoding.
-//
-
-#define VERSION "1.3.1"
-
-
-//...................................................................
-// hardware config
-// Radio output pin (default 32). Grove pins 25 or 26 also work if you prefer using the Grove port;
-// avoid them if you need I2C on SDA/SCL. Stay within isSafeAtomPin().
-#define PIN_RADIO (32)
-// note: {pin -> 330ohm -> 30cm loop antenna -> GND} works
-//     (33mW, but detuned length (super shorten), only very weak radiowave emitted).
-#define PIN_BUZZ (-1)   // no onboard buzzer on M5 Atom Lite
-#define PIN_LED (-1)    // use M5 Atom RGB LED instead
-// Optional measurement input (jumper to radio pin for self-test)
-// Default: GPIO33.
-#define PIN_MEAS (33)
-// Optional button pin (default 39 for M5 Atom Lite)
-#define PIN_BUTTON (39)
+// clocksync - local radio clock station.
+// Based on nisejjy by SASAKI Taroh and clocksync by Tanvach.
+// Fork improvements (v1.4.0-v1.5.0) by axelaberg91: DCF77 reliability,
+// time-sync safeguards, Atom Lite controls, Wi-Fi configuration and web UI.
+// Radio code, networking and display use separate execution paths.
+#define VERSION "1.5.0"
+#define PIN_RADIO 32
+#define PIN_MEAS 33
+#define PIN_LED -1
+#define PIN_RGB_LED 27
+#define PIN_BUTTON 39
+#define PIN_BUZZ -1
+#define DEVICENAME "clocksync"
+#define TZ "CET-1CEST,M3.5.0/2,M10.5.0/3"
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
-#include <WebServer.h>
-// M5 Atom Lite support (RGB LED, button, etc.)
-#include <M5Atom.h>
-// Drive strength configuration for safe antenna drive
-#include "driver/gpio.h"
-// High-resolution timer for precise tick scheduling
-#include "esp_timer.h"
-// ESP-IDF LEDC driver
-#include "driver/ledc.h"
+#include <esp32-hal-rgb-led.h>
 #include <Preferences.h>
-#define DEVICENAME "clocksync"
+#include <driver/ledc.h>
+#include <driver/gpio.h>
+#include <esp_timer.h>
+#include <esp_sntp.h>
+#include "time_policy.h"
+#include "web_ui.h"
+#include "wifi_config.h"
 
-// WiFi credentials are sourced from secrets.h (gitignored). An example
-// file is provided as secrets_example.h. If secrets.h is missing, the
-// example is used so the sketch still builds.
 #if __has_include("secrets.h")
 #include "secrets.h"
-#elif __has_include("secrets_example.h")
-#include "secrets_example.h"
+#define HAS_WIFI_SECRETS 1
 #else
-#error "Missing secrets.h or secrets_example.h"
+#define HAS_WIFI_SECRETS 0
 #endif
 
-char ssid[] = WIFI_SSID;
-char passwd[] = WIFI_PASS;
-// POSIX TZ string — set to your local timezone (see README for examples).
-// WWVB requires a US timezone for correct DST bits.
-// Find yours: tail -1 /etc/localtime (Mac/Linux) or see README
-#define TZ "PST8PDT,M3.2.0,M11.1.0"  // US Pacific; see README for other zones
+// Protocol encoders must never write to USB from the radio task.
+#define LOG_PRINT(...) ((void)0)
+#define LOG_PRINTLN(...) ((void)0)
+#define LOG_PRINTF(...) ((void)0)
 
-// ------------------------------------------------------------------
-// Logging helpers (USB serial only; web UI shows status separately)
-#define LOG_PRINT(x) do { Serial.print(x); } while (0)
-#define LOG_PRINTLN(x) do { Serial.println(x); } while (0)
-#define LOG_PRINTF(fmt, ...) do { Serial.printf((fmt), ##__VA_ARGS__); } while (0)
-
-// Minimal HTTP server for control/status
-WebServer server(80);
-
-//...................................................................
-// station specs
-//
 #define SN_JJY_E (0)  // JJY Fukushima Japan
 #define SN_JJY_W (1)  // JJY Fukuoka Japan
 #define SN_WWVB (2)   // WWVB US
@@ -79,7 +46,7 @@ WebServer server(80);
 #define SN_MSF (5)    // MSF UK
 #define SN_BPC (6)    // BPC China
 
-#define SN_DEFAULT (SN_WWVB)
+#define SN_DEFAULT (SN_DCF77)
 
 int st_cycle2[] = {
   // interrupt cycle, KHz: double of station freq
@@ -91,19 +58,6 @@ int st_cycle2[] = {
   120,  // 60KHz MSF
   137   // 68.5KHz BPC
 };
-
-// interrupt cycle to makeup radio wave, buzzer (500Hz = 1KHz cycle):
-// peripheral freq == 80MHz
-//    ex. radio freq 40KHz: intr 80KHz: 80KHz / 80MHz => 1/1000 (1/tm0cycle)
-//    buzz cycle: 1KHz / 80KHz 1/80 (1/radiodiv)
-int tm0cycle;
-#define TM0RES (1)
-int radiodiv;
-
-// TM0RES (interrupt counter), AMPDIV (buzz cycle(1000) / subsec(10)), SSECDIV (subsec / sec)
-// don't depend on station specs.
-#define AMPDIV (100)  // 1KHz / 100 => 10Hz, amplitude may change every 0.1 seconds
-#define SSECDIV (10)  // 10Hz / 10 => 1Hz, clock ticks
 
 // enum symbols
 #define SP_0 (0)
@@ -247,86 +201,97 @@ const char *stationNames[] = {
   "MSF (60 kHz)",
   "BPC (68.5 kHz)"
 };
-const char stationCmds[] = { 'j', 'k', 'w', 'd', 't', 'm', 'c' };
+const char stationCmds[] = "jkwdtmc";
 
-//...................................................................
-// globals
-hw_timer_t *tm0 = NULL;
-volatile SemaphoreHandle_t timerSemaphore;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-volatile uint32_t buzzup = 0;  // inc if buzz cycle (/2) passed
-int istimerstarted = 0;
-// TX enable/disable (controls whether the carrier + modulation scheduler are running)
-int txEnabled = 1;  // 1=enabled, 0=disabled
+struct Control {
+  bool requested = true;
+  bool led = true;
+  int station = SN_DEFAULT;
+  int pin = PIN_RADIO;
+  int drive = GPIO_DRIVE_CAP_2;
+  int dst = 2;
+  bool testCarrier = false;
+  bool editingTime = false;
+  bool wifiConnected = false;
+};
 
-int radioc = 0;  // 0..(RADIODIV - 1)
-int ampc = 0;    // 0..(AMPDIV - 1)
-int tssec = 0;   // 0..(SSECDIV - 1)
+struct RadioStatus {
+  bool active = false;
+  bool aligning = false;
+  uint32_t frequency = 0;
+  int error = 0;
+  clocksync::StatusLight light = clocksync::StatusLight::Off;
+};
 
-// Radio output GPIO (runtime configurable)
-volatile int pinRadio = PIN_RADIO;
-// GPIO drive strength (0=weakest..3=strongest)
-int driveStrength = GPIO_DRIVE_CAP_2;
-
-int currentStation = SN_DEFAULT;
-
-int ntpsync = 1;
-time_t now;
-struct tm nowtm;
-//int tsec, tmin, thour,    // initial values for date/time
-//    tday, tmon, tyear; // tyear: lower 2 digits of 20xx
-//int tdoy, tdow; // day of year (1-365/366), day of week (0-6)
-int radioout = 0,  // pin output values
-  buzzout = 0;
-int ampmod;                        // 1 if radio out is active (vibrating), 0 if reducted,
-                                   // at cuttent subsecond-second frame for current date-time
-int buzzsw = 0;                    // sound on/off
-volatile int overrideCarrier = 0;  // 1: force continuous carrier for self-test
-volatile uint32_t measCount = 0;   // edge counter for self-test
-int wwvbEncodeNextMinute = 0;      // 1: encode next minute (WWVB compatibility)
-int dstOverride = 2;               // 0=standard,1=DST,2=auto(nowtm.tm_isdst)
-
-Preferences prefs;
-// Last command response to surface in web UI (optional detail)
-String lastCmdResp;
-int ledEnabled = 1;                // 0=off, 1=on (M5 LED or PIN_LED)
-static int lastLedState = -1;      // -1 unknown, 0 off, 1 on, -2 disabled
-
-// WiFi Reconnect Tracking
-static unsigned long lastWiFiCheckTime = 0;
-const unsigned long WIFI_CHECK_INTERVAL = 60000; // 60 seconds
-
-// LEDC carrier generation (single output pin)
-
-// LEDC carrier generation (single output pin)
+static portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
+static Control control;
+static RadioStatus radioStatus;
+static clocksync::TimeTrust timeTrust;
+static clocksync::ButtonGesture button;
+static clocksync::DebouncedButton buttonInput;
+static WebServer server(80);
+static WiFiConfiguration wifiConfiguration(server);
+static Preferences prefs;
+static bool ntpsync = true;
+static bool syncRequested = true;
+static bool ntpConfigured = false;
+static bool ntpKicked = false;
+static bool wasConnected = false;
+static bool mdnsStarted = false;
+static bool mdnsAttempted = false;
+static uint32_t lastNtpKick = 0, lastMdnsAttempt = 0;
+static uint32_t timeEditGeneration = 0;
+static const uint32_t RETRY_MS = 60000;
+static String lastCmdResp;
+static volatile uint32_t measCount = 0;
 static const ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
 static const ledc_timer_t LEDC_TIMERIDX = LEDC_TIMER_0;
 static const ledc_channel_t LEDC_CHANNEL_ID = LEDC_CHANNEL_0;
-static const int LEDC_RES_BITS = 8;  // 8-bit duty resolution
-static uint32_t carrierHz = 60000;   // updated per station
-static int dutyHigh = 128;           // ~50% duty (max fundamental)
-static int dutyLow = 14;             // ~5.5% duty (~17% amplitude)
+static const int DUTY_HIGH = 128, DUTY_LOW = 14;
 
-// esp_timer for 100ms aligned ticks
-static esp_timer_handle_t tick_timer = NULL;
-static esp_timer_handle_t align_timer = NULL;
-static volatile int secBoundaryFlag = 0;  // set at each second boundary
-static volatile int tickFlag = 0;         // set each 100ms tick
-static volatile int currentSecond = 0;    // updated at second boundary
-
-// WWVB minute bits prepared like txtempus (bit 59 is first second)
+// These legacy protocol working variables are exclusively owned by radioTask.
+static struct tm nowtm;
+static int currentStation = SN_DEFAULT;
+static int dstOverride = 2;
+static time_t radioFrameMinute = 0;
 static uint64_t wwvb_bits = 0;
-static time_t wwvb_minute_prepared = (time_t)-1;
 
-// extern
-void IRAM_ATTR onTimer(void);
-void setup(void);
-void loop(void);
-void starttimer(void);
-void stoptimer(void);
-void setTxState(int enable);
-void ampchange(void);
-void setstation(int station);
+void snapshot(Control &c, clocksync::TimeTrust &t, RadioStatus &r) {
+  portENTER_CRITICAL(&stateMux);
+  c = control; t = timeTrust; r = radioStatus;
+  portEXIT_CRITICAL(&stateMux);
+}
+
+void publishRadio(const RadioStatus &r) {
+  portENTER_CRITICAL(&stateMux);
+  radioStatus = r;
+  portEXIT_CRITICAL(&stateMux);
+}
+
+void onTimeSync(struct timeval *tv) {
+  // A readable system clock is NOT proof of a new NTP reply.
+  if (!tv || tv->tv_sec < 1577836800) return;
+  portENTER_CRITICAL(&stateMux);
+  const uint32_t generation = timeEditGeneration;
+  const bool editing = control.editingTime;
+  portEXIT_CRITICAL(&stateMux);
+  if (editing) return;
+  struct timeval wall;
+  gettimeofday(&wall, nullptr);
+  const int64_t difference = ((int64_t)wall.tv_sec - tv->tv_sec) * 1000000 + wall.tv_usec - tv->tv_usec;
+  if (llabs(difference) > 50000) return;
+  const int64_t us = esp_timer_get_time();
+  portENTER_CRITICAL(&stateMux);
+  if (!control.editingTime && generation == timeEditGeneration) timeTrust.record(us, tv->tv_sec);
+  portEXIT_CRITICAL(&stateMux);
+}
+
+void mbc_wwvbjjy(void);
+void mb_jjy(void);
+void mb_wwvb(void);
+void mb_bsf(void);
+void mb_msf(void);
+void mb_bpc(void);
 void binarize(int v, int pos, int len);
 void bcdize(int v, int pos, int len);
 void rbinarize(int v, int pos, int len);
@@ -334,340 +299,17 @@ void rbcdize(int v, int pos, int len);
 void quadize(int v, int pos, int len);
 int parity(int pos, int len);
 int qparity(int pos, int len);
-void setlocaltime(void);
-void getlocaltime(void);
-//void setdoydow(void);
-//int julian(int y, int m, int d);
-//void incday(void); // for DCF77
-int docmd(char *buf);
-int a2toi(char *chp);
-void printbits60(void);
-void ntpstart(void);
-void ntpstop(void);
-int isSafeAtomPin(int p);
-void printhelp(void);
-void IRAM_ATTR meas_isr(void);
+static uint64_t to_padded5_bcd(int n);
+static int is_leap_year_full(int year);
+void prepareWWVBMinuteBits(time_t minuteStartUTC);
 int isUSDSTPending2h(void);
 int getDSTFlag(void);
 
-
-// LEDC/timer helpers
-void setupCarrierLEDC(void);
-void setCarrierPowerLevel(int highPower);
-void scheduleAlignedTicks(void);
-void IRAM_ATTR onAlignedStart(void *arg);
-void IRAM_ATTR onTick100ms(void *arg);
-void prepareWWVBMinuteBits(time_t minuteStartUTC);
-  // Web server helpers
-  void setupWebServer(void);
-  String generateStatusText(void);
-  void handleRoot(void);
-  void handleStatus(void);
-  void handleCmd(void);
-  void saveSettings(void);
-  void loadSettings(void);
-  void applyDefaultSettings(void);
-// GPIO helpers
-int clampDriveCap(int cap);
-void applyDriveStrength(void);
-
-//...................................................................
-// intr handler:
-//   this routine is called once every 1/2f sec (where f is radio freq).
-//   - reverse radio output pin if modulation flag "ampmod" == 1,
-//   - count up "radioc", if exceeds "radiodev" then
-//     turn on buzzer flag "buzzup"; the "buzzup" is set once in 1/1000sec
-//     on every frequency of the station (so "radiodev" should be set
-//     propery depending to the intr cycle "tm0cycle" of the station).
-void IRAM_ATTR onTimer(void) {
-  // no-op: LEDC-based carrier; ISR not used
-  return;
+void mb_dcf(void) {
+  clocksync::encodeDCF77(radioFrameMinute, dstOverride, bits60);
 }
 
-//...................................................................
-void setup(void) {
-
-  Serial.begin(115200);
-  delay(100);
-  LOG_PRINT("started...\n");
-
-  // Initialize M5 Atom Lite (Serial, no I2C, Display/LED enabled)
-  M5.begin(true, false, true);
-  // Ensure onboard RGB LED is off initially
-  M5.dis.drawpix(0, 0x000000);
-
-  LOG_PRINTLN("\nUSB serial control ready (115200 bps). Type 'h' + Enter for help.");
-
-  // HTTP server provides control/status.
-
-  // Credentials are compiled in; no need to persist them to NVS flash.
-  WiFi.persistent(false);
-  // Ensure max performance for network services
-  WiFi.setSleep(false);
-
-  // Load persisted settings before initializing subsystems
-  loadSettings();
-  if (ntpsync) {
-    ntpstart();
-  }
-
-  // Explicitly start mDNS after WiFi is connected (ntpstart connects WiFi)
-  if (WiFi.status() == WL_CONNECTED) {
-    if (MDNS.begin(DEVICENAME)) {
-      LOG_PRINTLN("mDNS responder started: " DEVICENAME ".local");
-    }
-  }
-
-  // Start HTTP control/status server
-  setupWebServer();
-  // Prepare radio pin
-  pinMode(PIN_MEAS, INPUT_PULLDOWN);
-  pinMode(pinRadio, OUTPUT);
-  digitalWrite(pinRadio, LOW);
-  applyDriveStrength();
-  if (PIN_BUZZ >= 0) {
-    pinMode(PIN_BUZZ, OUTPUT);
-    digitalWrite(PIN_BUZZ, buzzout);
-  }
-  if (PIN_LED >= 0) {
-    if (ledEnabled) {
-      pinMode(PIN_LED, OUTPUT);
-      digitalWrite(PIN_LED, LOW);
-      lastLedState = 0;
-    } else {
-      pinMode(PIN_LED, INPUT);  // tri-state to avoid any drive
-      lastLedState = -2;
-    }
-  } else {
-    if (ledEnabled) {
-      // leave off initially; will blink based on ampmod in loop()
-      M5.dis.drawpix(0, 0x000000);
-      lastLedState = 0;
-    } else {
-      // ensure fully off and no further updates in loop when disabled
-      M5.dis.drawpix(0, 0x000000);
-      lastLedState = -2;
-    }
-  }
-  //  setdoydow();
-  setstation(currentStation);  // will start carrier only if txEnabled
-  LOG_PRINT(txEnabled ? "radio started.\n" : "radio disabled (TX off).\n");
-}
-
-
-void loop() {
-  int buzzup2 = 0;  // legacy
-  static char buf[128];
-  static int bufp = 0;
-  static char usb[128];
-  static int usbp = 0;
-
-  // Non-blocking WiFi reconnect check
-  if (ntpsync) {
-    unsigned long currentMillis = millis();
-    if (WiFi.status() == WL_CONNECTED) {
-      lastWiFiCheckTime = currentMillis; // Constantly reset while connected
-    } else if (currentMillis - lastWiFiCheckTime >= WIFI_CHECK_INTERVAL) {
-      lastWiFiCheckTime = currentMillis;
-      LOG_PRINTLN("WiFi disconnected. Attempting reconnect...");
-      WiFi.disconnect();
-      WiFi.begin(ssid, passwd); // Re-initiate connection
-    }
-  }
-
-  // Update M5 state (button, etc.)
-  M5.update();
-  if (M5.Btn.wasPressed()) {
-    setTxState(!txEnabled);
-    saveSettings();
-    LOG_PRINTF("Button: TX %s\n", txEnabled ? "enabled" : "disabled");
-  }
-  // For generic ESP32 (if M5Atom lib excluded):
-  // if (digitalRead(PIN_BUTTON) == LOW) { delay(50); if(digitalRead(PIN_BUTTON)==LOW) { ... } }
-
-  // Aligned second boundary
-  if (secBoundaryFlag) {
-    secBoundaryFlag = 0;
-    int lastmin = nowtm.tm_min;
-    getlocaltime();
-    currentSecond = nowtm.tm_sec;
-    if (lastmin != nowtm.tm_min) {
-      if (currentStation != SN_WWVB) {
-        makebitpattern();
-        printbits60();
-      }
-    }
-    if (currentStation == SN_WWVB) {
-      time_t tnow;
-      time(&tnow);
-      time_t minuteStartUTC = tnow - (tnow % 60);
-      if (wwvb_minute_prepared != minuteStartUTC) {
-        prepareWWVBMinuteBits(minuteStartUTC);
-        wwvb_minute_prepared = minuteStartUTC;
-      }
-    }
-    LOG_PRINTF("%d-%d-%d, %d(%d) %02d:%02d:%02d\n",
-               nowtm.tm_year + 1900, nowtm.tm_mon + 1, nowtm.tm_mday,
-               nowtm.tm_yday, nowtm.tm_wday,
-               nowtm.tm_hour, nowtm.tm_min, nowtm.tm_sec);
-  }
-
-  // 100ms tick: drive amplitude
-  if (tickFlag) {
-    tickFlag = 0;
-    int highPower = 1;
-    if (overrideCarrier) {
-      highPower = 1;
-    } else if (currentStation == SN_WWVB) {
-      int sec = currentSecond % 60;
-      int lowTicks;
-      if (sec == 0 || (sec % 10) == 9) {
-        lowTicks = 8;  // marker
-      } else {
-        int bit = (int)((wwvb_bits >> (59 - sec)) & 1ULL);
-        lowTicks = bit ? 5 : 2;
-      }
-      highPower = (tssec >= lowTicks) ? 1 : 0;
-    } else {
-      highPower = secpattern[bits60[nowtm.tm_sec] * 10 + tssec] ? 1 : 0;
-    }
-    ampmod = highPower;
-    setCarrierPowerLevel(ampmod);
-    if (ledEnabled) {
-      int desired = ampmod ? 1 : 0;
-      if (PIN_LED >= 0) {
-        if (lastLedState != desired) {
-          // ensure output mode when enabled
-          pinMode(PIN_LED, OUTPUT);
-          digitalWrite(PIN_LED, desired ? HIGH : LOW);
-          lastLedState = desired;
-        }
-      } else {
-        if (lastLedState != desired) {
-          M5.dis.drawpix(0, desired ? 0x10ff10 : 0x000000);
-          lastLedState = desired;
-        }
-      }
-    } else {
-      // Disable LED hardware completely; do this once
-      if (lastLedState != -2) {
-        if (PIN_LED >= 0) {
-          pinMode(PIN_LED, INPUT);
-        } else {
-          M5.dis.drawpix(0, 0x000000);
-        }
-        lastLedState = -2;
-      }
-    }
-    Serial.print(ampmod ? "~" : ".");
-  }
-  // Commands accepted via USB serial and HTTP
-  while (Serial.available()) {
-    usb[usbp] = Serial.read();
-    if (usb[usbp] == '\n' || usb[usbp] == '\r' || usbp == sizeof(usb) - 1) {
-      usb[usbp] = '\0';
-      docmd(usb);
-      usbp = 0;
-    } else {
-      usbp++;
-    }
-  }
-  // Handle HTTP requests quickly; non-blocking
-  server.handleClient();
-  delay(1);  // feed watchdog
-}
-
-
-//...................................................................
-
-
-//...................................................................
-void starttimer(void) {
-  if (istimerstarted) {
-    stoptimer();
-  }
-  setupCarrierLEDC();
-  scheduleAlignedTicks();
-  LOG_PRINT("(re)started LEDC carrier + tick scheduler...\n");
-  istimerstarted = 1;
-  return;
-}
-
-void stoptimer(void) {
-  if (istimerstarted) {
-    if (align_timer) {
-      esp_timer_stop(align_timer);
-    }
-    if (tick_timer) {
-      esp_timer_stop(tick_timer);
-    }
-    // Turn off carrier and tristate the pin (high-impedance).
-    // Avoid ledc_stop() which can pause the timer and cause restart issues.
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_ID, 0);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_ID);
-    pinMode(pinRadio, INPUT);  // detach LEDC, Hi-Z: no current through antenna
-    istimerstarted = 0;
-  }
-}
-
-// setup amplitude value ampmod depends on bit pattern & 0.1 second frame
-void ampchange(void) {
-  // handled in loop() by LEDC amplitude update
-  return;
-}
-
-void setTxState(int enable) {
-  if (enable) {
-    txEnabled = 1;
-    starttimer();
-  } else {
-    txEnabled = 0;
-    stoptimer();
-    // Force LED off
-    if (ledEnabled) {
-      if (PIN_LED >= 0) {
-        digitalWrite(PIN_LED, LOW);
-      } else {
-        M5.dis.drawpix(0, 0x000000);
-      }
-      lastLedState = 0;
-    }
-  }
-}
-
-
-void setstation(int station) {
-  stoptimer();
-  LOG_PRINTF("station #%d:\n", station);
-  currentStation = station;
-  tm0cycle = 80000 / st_cycle2[station];
-  radiodiv = st_cycle2[station];
-  LOG_PRINTF("  freq %fMHz, timer intr: 80M / (%d x %d), buzz/radio: /%d\n",
-             (float)radiodiv / 2., tm0cycle, TM0RES, radiodiv);
-  bits60 = st_bits[station];
-  LOG_PRINTF("  bits60 pattern: ");
-  for (int i = 0; i < 60; i++) {
-    LOG_PRINTF("%d", (int)bits60[i]);
-  }
-  secpattern = st_sp[station];
-  LOG_PRINTF("\n  second pattern: ");
-  for (int i = 0; i < 10; i++) {
-    LOG_PRINTF("%d", (int)secpattern[i]);
-  }
-  LOG_PRINTF("...\n");
-  makebitpattern = st_makebits[station];
-  makebitpattern();
-  printbits60();
-  if (txEnabled) {
-    starttimer();
-  }
-  return;
-}
-
-//...................................................................
-// makeup bit pattern for current date, hour:min
-
-void mbc_wwvbjjy(void)  //--- [0..33] are common in WWVB/JJY
+void mbc_wwvbjjy(void)
 {
   binarize(nowtm.tm_min / 10, 1, 3);
   binarize(nowtm.tm_min % 10, 5, 4);
@@ -680,95 +322,52 @@ void mbc_wwvbjjy(void)  //--- [0..33] are common in WWVB/JJY
   binarize(y100, 22, 2);
   binarize(y10, 25, 4);
   binarize(y1, 30, 4);
-  //  Serial.printf("min%d-%d hour%d-%d doy%d-%d-%d ", tmin / 10, tmin % 10, thour / 10, thour % 10,
-  //    y100, y10, y1);
+
   return;
 }
 
-void mb_jjy(void)  //---- JJY_E & JJY_W
+void mb_jjy(void)
 {
   LOG_PRINT("encode JJY format - ");
   mbc_wwvbjjy();
   bits60[36] = parity(12, 7);
   bits60[37] = parity(1, 8);
-  //  Serial.printf("pa2%d ", s % 2);
+
   binarize((nowtm.tm_year - 100) / 10, 41, 4);
   binarize(nowtm.tm_year % 10, 45, 4);
   binarize(nowtm.tm_wday, 50, 3);
-  //  Serial.printf("year%d-%d dow%d\n", tyear / 10, tyear % 10, tdow);
+
   return;
 }
 
 void mb_wwvb(void) {
   LOG_PRINT("encode WWVB format - ");
-  // For display/debug only; actual modulation uses wwvb_bits
+
   time_t nowtime;
   time(&nowtime);
   struct tm *utm = gmtime(&nowtime);
   struct tm ut = *utm;
-  // minutes
+
   binarize(ut.tm_min / 10, 1, 3);
   binarize(ut.tm_min % 10, 5, 4);
-  // hours
+
   binarize(ut.tm_hour / 10, 12, 2);
   binarize(ut.tm_hour % 10, 15, 4);
-  // day of year (1..366)
+
   int yday1 = ut.tm_yday + 1;
   binarize((yday1 / 100) % 10, 22, 2);
   binarize((yday1 / 10) % 10, 25, 4);
   binarize(yday1 % 10, 30, 4);
-  // year (00..99)
+
   binarize((ut.tm_year) / 10, 45, 4);
   binarize((ut.tm_year) % 10, 50, 4);
-  // local DST state (approximate; not used for modulation)
+
   bits60[57] = nowtm.tm_isdst ? SP_1 : SP_0;
   bits60[58] = isUSDSTPending2h();
   return;
 }
 
-void mb_dcf(void)  //---- DCF77
-{
-  LOG_PRINT("encode DCF77 format - ");
-  //  bits60[0] = SP_0; // (obsolate) this routine is used also by mb_hbg() which changes bits60[0]
-  // Seasonal flags (Z1/Z2)
-  if (getDSTFlag()) {
-    bits60[17] = SP_1;  // Z1 = 1
-    bits60[18] = SP_0;  // Z2 = 0 (DST)
-  } else {
-    bits60[17] = SP_0;  // Z1 = 0
-    bits60[18] = SP_1;  // Z2 = 1 (standard)
-  }
-  rbcdize(nowtm.tm_min, 21, 7);
-  bits60[28] = parity(21, 7);
-  rbcdize(nowtm.tm_hour, 29, 6);
-  bits60[35] = parity(29, 6);
-  rbcdize(nowtm.tm_mday, 36, 6);
-  rbinarize(nowtm.tm_wday, 42, 3);
-  rbcdize(nowtm.tm_mon + 1, 45, 5);
-  rbcdize(nowtm.tm_year - 100, 50, 8);
-  bits60[58] = parity(36, 22);
-  return;
-}
-
-/*
-void
-mb_hbg(void)   //---- HBG
-{
-    mb_dcf();
-    if (tmin != 0) {
-      bits60[0] = SP_M0;
-    } else {
-      if (thour % 12 != 0) {
-        bits60[0] = SP_M00;
-      } else {
-        bits60[0] = SP_M000;
-      }
-    }
-    return;
-}
-*/
-
-void mb_bsf(void)  //---- BSF
+void mb_bsf(void)
 {
   LOG_PRINT("encode BSF format - ");
   quadize(nowtm.tm_min, 41, 3);
@@ -791,11 +390,11 @@ void mb_msf(void) {
   binarize(nowtm.tm_wday, 36, 3);
   bcdize(nowtm.tm_hour, 39, 6);
   bcdize(nowtm.tm_min, 45, 7);
-  bits60[54] = parity(17, 8) * 2 + 1;   // in MSF parity bits, values are {1, 3} (SP_1, SP_P1)
-  bits60[55] = parity(25, 11) * 2 + 1;  // for parity {0, 1}.
+  bits60[54] = parity(17, 8) * 2 + 1;
+  bits60[55] = parity(25, 11) * 2 + 1;
   bits60[56] = parity(36, 3) * 2 + 1;
   bits60[57] = parity(39, 13) * 2 + 1;
-  // Set summertime indicator using DST override
+
   bits60[58] = getDSTFlag() ? SP_P1 : SP_1;
 
   return;
@@ -818,8 +417,6 @@ void mb_bpc(void) {
   return;
 }
 
-
-// write binary value into bit pattern (little endian)
 void binarize(int v, int pos, int len) {
   for (pos = pos + len - 1; 0 < len; pos--, len--) {
     bits60[pos] = (uint8_t)(v & 1);
@@ -828,195 +425,6 @@ void binarize(int v, int pos, int len) {
   return;
 }
 
-void IRAM_ATTR meas_isr(void) {
-  measCount++;
-}
-
-// -- LEDC carrier helpers -------------------------------------------------
-
-void setupCarrierLEDC(void) {
-  // Configure LEDC timer and channel for the selected frequency (ESP-IDF)
-  ledc_timer_config_t tcfg = {};
-  tcfg.speed_mode = LEDC_MODE;
-  tcfg.duty_resolution = (ledc_timer_bit_t)LEDC_RES_BITS;
-  tcfg.timer_num = LEDC_TIMERIDX;
-  tcfg.freq_hz = carrierHz;
-  tcfg.clk_cfg = LEDC_AUTO_CLK;
-  ledc_timer_config(&tcfg);
-
-  ledc_channel_config_t c = {};
-  c.gpio_num = pinRadio;
-  c.speed_mode = LEDC_MODE;
-  c.channel = LEDC_CHANNEL_ID;
-  c.intr_type = LEDC_INTR_DISABLE;
-  c.timer_sel = LEDC_TIMERIDX;
-  c.duty = dutyHigh;
-  c.hpoint = 0;
-  ledc_channel_config(&c);
-}
-
-void setCarrierPowerLevel(int highPower) {
-  uint32_t d = highPower ? (uint32_t)dutyHigh : (uint32_t)dutyLow;
-  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_ID, d);
-  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_ID);
-}
-
-// -- esp_timer aligned tick scheduler ------------------------------------
-
-void IRAM_ATTR onTick100ms(void *arg) {
-  int t = tssec + 1;
-  if (t >= 10) {
-    t = 0;
-    secBoundaryFlag = 1;
-  }
-  tssec = t;
-  tickFlag = 1;
-}
-
-void IRAM_ATTR onAlignedStart(void *arg) {
-  // Start periodic 100ms timer exactly at second boundary
-  if (!tick_timer) {
-    esp_timer_create_args_t targs = {};
-    targs.callback = &onTick100ms;
-    targs.arg = NULL;
-    targs.dispatch_method = ESP_TIMER_TASK;
-    targs.name = "tick100ms";
-    esp_timer_create(&targs, &tick_timer);
-  }
-  tssec = 0;
-  secBoundaryFlag = 1;
-  tickFlag = 1;
-  esp_timer_start_periodic(tick_timer, 100000);  // 100 ms
-}
-
-void scheduleAlignedTicks(void) {
-  // Create or restart a one-shot timer to fire at the next wall-clock second
-  if (!align_timer) {
-    esp_timer_create_args_t aargs = {};
-    aargs.callback = &onAlignedStart;
-    aargs.arg = NULL;
-    aargs.dispatch_method = ESP_TIMER_TASK;
-    aargs.name = "alignStart";
-    esp_timer_create(&aargs, &align_timer);
-  }
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  int64_t us_to_next = 1000000 - tv.tv_usec;
-  if (us_to_next <= 0) us_to_next = 1;
-  esp_timer_start_once(align_timer, (uint64_t)us_to_next);
-}
-
-// -- WWVB minute bits exactly like txtempus ------------------------------
-
-static uint64_t to_padded5_bcd(int n) {
-  return (uint64_t)(((n / 100) % 10) << 10) | (uint64_t)(((n / 10) % 10) << 5) | (uint64_t)(n % 10);
-}
-
-static int is_leap_year_full(int year) {
-  return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);
-}
-
-void prepareWWVBMinuteBits(time_t minuteStartUTC) {
-  struct tm ut;
-  gmtime_r(&minuteStartUTC, &ut);
-
-  // Build 60-bit frame, bit 59 is first second of the minute
-  uint64_t bits = 0ULL;
-  bits |= to_padded5_bcd(ut.tm_min) << (59 - 8);
-  bits |= to_padded5_bcd(ut.tm_hour) << (59 - 18);
-  bits |= to_padded5_bcd(ut.tm_yday + 1) << (59 - 33);
-  bits |= to_padded5_bcd(ut.tm_year % 100) << (59 - 53);
-  bits |= (uint64_t)(is_leap_year_full(ut.tm_year + 1900) ? 1 : 0) << (59 - 55);
-
-  // DST flags (bits 57-58): derived from TZ via localtime_r().
-  // TZ must be set to a US timezone for correct WWVB DST indication.
-  struct tm lt_now, lt_tom;
-  time_t t_now_local = minuteStartUTC;
-  localtime_r(&t_now_local, &lt_now);
-  time_t t_tom_local = minuteStartUTC + 86400;
-  localtime_r(&t_tom_local, &lt_tom);
-  bits |= (uint64_t)(lt_tom.tm_isdst ? 1 : 0) << (59 - 57);
-  bits |= (uint64_t)(lt_now.tm_isdst ? 1 : 0) << (59 - 58);
-
-  wwvb_bits = bits;
-}
-
-// Return 1 if a US DST switch occurs within the next 2 hours (local time)
-int isUSDSTPending2h(void) {
-  // current local time_t from nowtm
-  struct tm nowLocal = nowtm;
-  time_t nowt = mktime(&nowLocal);
-  int year = nowLocal.tm_year;  // years since 1900
-
-  auto firstSunday = [](int year1900, int mon) -> int {
-    struct tm t = { 0 };
-    t.tm_year = year1900;
-    t.tm_mon = mon;
-    t.tm_mday = 1;
-    t.tm_hour = 0;
-    t.tm_isdst = -1;
-    mktime(&t);
-    int dow = t.tm_wday;  // 0..6, 0=Sunday
-    return 1 + ((7 - dow) % 7);
-  };
-
-  auto secondSunday = [&](int year1900, int mon) -> int {
-    int d1 = firstSunday(year1900, mon);
-    return d1 + 7;
-  };
-
-  // DST start: second Sunday in March, 02:00 local
-  struct tm spring = { 0 };
-  spring.tm_year = year;
-  spring.tm_mon = 2;  // March
-  spring.tm_mday = secondSunday(year, 2);
-  spring.tm_hour = 2;
-  spring.tm_isdst = -1;
-  time_t tSpring = mktime(&spring);
-
-  // DST end: first Sunday in November, 02:00 local
-  struct tm fall = { 0 };
-  fall.tm_year = year;
-  fall.tm_mon = 10;  // November
-  fall.tm_mday = firstSunday(year, 10);
-  fall.tm_hour = 2;
-  fall.tm_isdst = -1;
-  time_t tFall = mktime(&fall);
-
-  time_t tx;
-  if (nowLocal.tm_isdst > 0) {  // currently DST → next is fall
-    if (nowt < tFall) {
-      tx = tFall;
-    } else {
-      // compute next year's fall
-      fall.tm_year = year + 1;
-      fall.tm_mday = firstSunday(year + 1, 10);
-      tx = mktime(&fall);
-    }
-  } else {  // currently standard → next is spring
-    if (nowt < tSpring) {
-      tx = tSpring;
-    } else {
-      // next year's spring
-      spring.tm_year = year + 1;
-      spring.tm_mday = secondSunday(year + 1, 2);
-      tx = mktime(&spring);
-    }
-  }
-
-  double dt = difftime(tx, nowt);
-  return (dt >= 0 && dt <= 7200) ? 1 : 0;
-}
-
-int getDSTFlag(void) {
-  if (dstOverride == 2) {
-    return (nowtm.tm_isdst > 0) ? 1 : 0;
-  }
-  return dstOverride ? 1 : 0;
-}
-
-
-// continuous (over 4 bit) BCD to write
 void bcdize(int v, int pos, int len) {
   int l;
 
@@ -1035,7 +443,6 @@ void bcdize(int v, int pos, int len) {
   return;
 }
 
-// LSB->MSB (big endian) binarize
 void rbinarize(int v, int pos, int len) {
   for (; 0 < len; pos++, len--) {
     bits60[pos] = (uint8_t)(v & 1);
@@ -1044,7 +451,6 @@ void rbinarize(int v, int pos, int len) {
   return;
 }
 
-// LSB->MSB BCDize
 void rbcdize(int v, int pos, int len) {
   int l;
 
@@ -1063,8 +469,6 @@ void rbcdize(int v, int pos, int len) {
   return;
 }
 
-
-// 4-ary encoding (little endian)
 void quadize(int v, int pos, int len) {
   for (pos = pos + len - 1; 0 < len; pos--, len--) {
     bits60[pos] = (uint8_t)(v & 3);
@@ -1073,579 +477,617 @@ void quadize(int v, int pos, int len) {
   return;
 }
 
-// calculate even parity
 int parity(int pos, int len) {
   int s = 0;
 
-  for (pos; 0 < len; pos++, len--) {
+  for (; 0 < len; pos++, len--) {
     s += bits60[pos];
   }
   return (s % 2);
 }
 
-// binary parity for 4-ary data (for BSF/BPC): is it OK?
 int qparity(int pos, int len) {
   int s = 0;
 
-  for (pos; 0 < len; pos++, len--) {
+  for (; 0 < len; pos++, len--) {
     s += (bits60[pos] & 1) + ((bits60[pos] & 2) >> 1);
   }
   return (s % 2);
 }
 
+static uint64_t to_padded5_bcd(int n) {
+  return (uint64_t)(((n / 100) % 10) << 10) | (uint64_t)(((n / 10) % 10) << 5) | (uint64_t)(n % 10);
+}
 
+static int is_leap_year_full(int year) {
+  return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);
+}
 
+void prepareWWVBMinuteBits(time_t minuteStartUTC) {
+  struct tm ut;
+  gmtime_r(&minuteStartUTC, &ut);
 
-//...................................................................
-// Command handler
-//
-// Processes commands from Serial (USB) and HTTP.
-// See README.md for the full command reference.
-//
+  uint64_t bits = 0ULL;
+  bits |= to_padded5_bcd(ut.tm_min) << (59 - 8);
+  bits |= to_padded5_bcd(ut.tm_hour) << (59 - 18);
+  bits |= to_padded5_bcd(ut.tm_yday + 1) << (59 - 33);
+  bits |= to_padded5_bcd(ut.tm_year % 100) << (59 - 53);
+  bits |= (uint64_t)(is_leap_year_full(ut.tm_year + 1900) ? 1 : 0) << (59 - 55);
 
+  struct tm lt_now, lt_tom;
+  time_t t_now_local = minuteStartUTC;
+  localtime_r(&t_now_local, &lt_now);
+  time_t t_tom_local = minuteStartUTC + 86400;
+  localtime_r(&t_tom_local, &lt_tom);
+  bits |= (uint64_t)(lt_tom.tm_isdst ? 1 : 0) << (59 - 57);
+  bits |= (uint64_t)(lt_now.tm_isdst ? 1 : 0) << (59 - 58);
 
-int docmd(char *buf) {
-  int arg1, arg2;
-  LOG_PRINTF("cmd: >>%s<<\n", buf);
-  if (buf[0] == 'd' || buf[0] == 'D') {  // set date
-    if (strlen(buf) != 7) {
-      return 0;
-    }
-    int y = a2toi(buf + 1);
-    int m = a2toi(buf + 3);
-    int d = a2toi(buf + 5);
-    LOG_PRINTF("%d %d %d\n", y, m, d);
-    if (y < 0 || m < 0 || 12 < m || d < 0 || 31 < d) {  // can set Feb 31 :-)
-      return 0;
-    }
-    nowtm.tm_year = y + 100;
-    nowtm.tm_mon = m - 1;
-    nowtm.tm_mday = d;
-    setlocaltime();
-    LOG_PRINTF("set date: >>%s<<\n", buf + 1);
-    return 1;
-  } else if (buf[0] == 't' || buf[0] == 'T') {  // set time & start tick
-    if (strlen(buf) != 7) {
-      return 0;
-    }
-    int h = a2toi(buf + 1);
-    int m = a2toi(buf + 3);
-    int s = a2toi(buf + 5);
-    if (h < 0 || 24 < h || m < 0 || 60 < m || s < 0 || 60 < s) {
-      return 0;
-    }
-    nowtm.tm_hour = h;
-    nowtm.tm_min = m;
-    nowtm.tm_sec = s;
-    tssec = 0;
-    ampc = 0;
-    radioc = 0;  // no semaphore lock: don't care if override by intr routine :-)
-    setlocaltime();
-    LOG_PRINTF("set time...restart tick: >>%s<<\n", buf + 1);
-    return 1;
-  } else if (buf[0] == 'z' || buf[0] == 'Z') {  // buzzer on(1)/off(0)
-    if (buf[1] == '0') {
-      buzzsw = 0;
-    } else if (buf[1] == '1') {
-      buzzsw = 1;
+  wwvb_bits = bits;
+}
+
+int isUSDSTPending2h(void) {
+
+  struct tm nowLocal = nowtm;
+  time_t nowt = mktime(&nowLocal);
+  int year = nowLocal.tm_year;
+
+  auto firstSunday = [](int year1900, int mon) -> int {
+    struct tm t = {};
+    t.tm_year = year1900;
+    t.tm_mon = mon;
+    t.tm_mday = 1;
+    t.tm_hour = 0;
+    t.tm_isdst = -1;
+    mktime(&t);
+    int dow = t.tm_wday;
+    return 1 + ((7 - dow) % 7);
+  };
+
+  auto secondSunday = [&](int year1900, int mon) -> int {
+    int d1 = firstSunday(year1900, mon);
+    return d1 + 7;
+  };
+
+  struct tm spring = {};
+  spring.tm_year = year;
+  spring.tm_mon = 2;
+  spring.tm_mday = secondSunday(year, 2);
+  spring.tm_hour = 2;
+  spring.tm_isdst = -1;
+  time_t tSpring = mktime(&spring);
+
+  struct tm fall = {};
+  fall.tm_year = year;
+  fall.tm_mon = 10;
+  fall.tm_mday = firstSunday(year, 10);
+  fall.tm_hour = 2;
+  fall.tm_isdst = -1;
+  time_t tFall = mktime(&fall);
+
+  time_t tx;
+  if (nowLocal.tm_isdst > 0) {
+    if (nowt < tFall) {
+      tx = tFall;
     } else {
-      return 0;
+
+      fall.tm_year = year + 1;
+      fall.tm_mday = firstSunday(year + 1, 10);
+      tx = mktime(&fall);
     }
-    LOG_PRINTF("buzzer: >>%c<<\n", buf + 1);
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'l' || buf[0] == 'L') {  // LED on(1)/off(0)
-    if (buf[1] == '0') {
-      ledEnabled = 0;
-    } else if (buf[1] == '1') {
-      ledEnabled = 1;
+  } else {
+    if (nowt < tSpring) {
+      tx = tSpring;
     } else {
-      return 0;
+
+      spring.tm_year = year + 1;
+      spring.tm_mday = secondSunday(year + 1, 2);
+      tx = mktime(&spring);
     }
-    // Apply immediately with proper hardware state
-    if (PIN_LED >= 0) {
-      if (ledEnabled) {
-        pinMode(PIN_LED, OUTPUT);
-        digitalWrite(PIN_LED, LOW);
-        lastLedState = 0;
-      } else {
-        pinMode(PIN_LED, INPUT);  // tri-state
-        lastLedState = -2;
+  }
+
+  double dt = difftime(tx, nowt);
+  return (dt >= 0 && dt <= 7200) ? 1 : 0;
+}
+
+int getDSTFlag(void) {
+  if (dstOverride == 2) {
+    return (nowtm.tm_isdst > 0) ? 1 : 0;
+  }
+  return dstOverride ? 1 : 0;
+}
+
+void makeFrame(const Control &c, time_t minute) {
+  currentStation = c.station;
+  dstOverride = c.dst;
+  radioFrameMinute = minute;
+  localtime_r(&minute, &nowtm);
+  bits60 = st_bits[c.station];
+  secpattern = st_sp[c.station];
+  if (c.station == SN_WWVB) prepareWWVBMinuteBits(minute);
+  else st_makebits[c.station]();
+}
+
+void indicator(clocksync::StatusLight light) {
+  uint32_t color = 0;
+  switch (light) {
+    case clocksync::StatusLight::Green: color = 0x00ff00; break;
+    case clocksync::StatusLight::Yellow: color = 0xffff00; break;
+    case clocksync::StatusLight::Red: color = 0xff0000; break;
+    case clocksync::StatusLight::Stopped:
+      color = (esp_timer_get_time() / 500000) % 2 ? 0xff0000 : 0;
+      break;
+    default: break;
+  }
+  static uint32_t previous = UINT32_MAX;
+  if (previous == color) return;
+  previous = color;
+#if PIN_LED >= 0
+  digitalWrite(PIN_LED, color ? HIGH : LOW);
+#elif PIN_RGB_LED >= 0
+  // Match the low brightness used for the Atom's single SK6812 status pixel.
+  const uint8_t red = ((color >> 16) & 255) * 20 / 255;
+  const uint8_t green = ((color >> 8) & 255) * 20 / 255;
+  const uint8_t blue = (color & 255) * 20 / 255;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  rgbLedWrite(PIN_RGB_LED, red, green, blue);
+#else
+  neopixelWrite(PIN_RGB_LED, red, green, blue);
+#endif
+#endif
+}
+
+void stopCarrier(int pin) {
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_ID, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_ID);
+  pinMode(pin, INPUT);
+}
+
+esp_err_t configureCarrier(const Control &c) {
+  ledc_timer_config_t timer = {};
+  timer.speed_mode = LEDC_MODE;
+  timer.timer_num = LEDC_TIMERIDX;
+  timer.duty_resolution = LEDC_TIMER_8_BIT;
+  timer.freq_hz = st_cycle2[c.station] * 500;
+  timer.clk_cfg = LEDC_USE_APB_CLK;
+  esp_err_t result = ledc_timer_config(&timer);
+  if (result != ESP_OK) return result;
+  ledc_channel_config_t channel = {};
+  channel.gpio_num = c.pin;
+  channel.speed_mode = LEDC_MODE;
+  channel.channel = LEDC_CHANNEL_ID;
+  channel.intr_type = LEDC_INTR_DISABLE;
+  channel.timer_sel = LEDC_TIMERIDX;
+  channel.duty = 0;  // configuring hardware must not bypass the time guard
+  channel.hpoint = 0;
+  result = ledc_channel_config(&channel);
+  if (result == ESP_OK) {
+    result = gpio_set_drive_capability((gpio_num_t)c.pin, (gpio_drive_cap_t)c.drive);
+  }
+  return result;
+}
+
+void radioTask(void *) {
+  Control configured, previousControl;
+  bool controlKnown = false;
+  bool hardwareReady = false, eligibleBefore = false, attached = false;
+  time_t waitUntil = 0, preparedMinute = (time_t)-1;
+  int64_t lastSlot = -1, previousOffset = 0;
+  bool offsetKnown = false;
+  uint32_t lastHardwareAttempt = 0;
+  int previousDuty = -1;
+  RadioStatus state;
+
+  for (;;) {
+    Control c; clocksync::TimeTrust trust; RadioStatus ignored;
+    snapshot(c, trust, ignored);
+    const int64_t monotonic = esp_timer_get_time();
+    struct timeval tv; gettimeofday(&tv, nullptr);
+    const int64_t wallUs = (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+    const time_t minute = tv.tv_sec - tv.tv_sec % 60;
+    const bool fresh = trust.fresh(monotonic);
+    const bool eligible = c.requested && fresh && !c.editingTime;
+    const int64_t offset = wallUs - monotonic;
+    const bool clockStep = offsetKnown && llabs(offset - previousOffset) > 50000;
+    previousOffset = offset;
+    offsetKnown = fresh;
+
+    const bool changed = !controlKnown || c.pin != previousControl.pin || c.station != previousControl.station ||
+                         c.drive != previousControl.drive || c.dst != previousControl.dst;
+    previousControl = c;
+    controlKnown = true;
+    if (changed || (eligible && !eligibleBefore) || (fresh && clockStep)) {
+      if (attached) stopCarrier(configured.pin);
+      attached = false;
+      hardwareReady = false;
+      state.active = false;
+      waitUntil = minute + 60; // start a coherent frame at the next minute boundary
+      preparedMinute = (time_t)-1;
+      previousDuty = -1;
+      lastSlot = -1;
+      state.error = 0;
+    }
+    eligibleBefore = eligible;
+
+    if (!eligible) {
+      if (attached) stopCarrier(configured.pin);
+      attached = false;
+      state.active = false;
+      state.aligning = false;
+    } else if (tv.tv_sec < waitUntil) {
+      state.active = false;
+      state.aligning = true;
+    } else {
+      state.aligning = false;
+      if (!hardwareReady && (state.error == 0 || millis() - lastHardwareAttempt >= 1000)) {
+        lastHardwareAttempt = millis();
+        configured = c;
+        state.error = configureCarrier(c);
+        hardwareReady = state.error == ESP_OK;
+        attached = hardwareReady;
+        state.frequency = hardwareReady ? ledc_get_freq(LEDC_MODE, LEDC_TIMERIDX) : 0;
+        if (!hardwareReady) pinMode(c.pin, INPUT);
       }
-    } else {
-      if (ledEnabled) {
-        M5.dis.drawpix(0, 0x000000);
-        lastLedState = 0;
-      } else {
-        M5.dis.drawpix(0, 0x000000);
-        lastLedState = -2;
+      if (hardwareReady) {
+        if (!attached) {
+          state.error = configureCarrier(c);
+          attached = state.error == ESP_OK;
+          previousDuty = -1;
+        }
+        if (attached) {
+          if (preparedMinute != minute) {
+            makeFrame(c, minute);
+            preparedMinute = minute;
+          }
+          const int64_t slot = (int64_t)tv.tv_sec * 10 + tv.tv_usec / 100000;
+          if (slot != lastSlot || c.testCarrier || previousDuty < 0) {
+            const int second = tv.tv_sec % 60;
+            const int tenth = tv.tv_usec / 100000;
+            int high;
+            if (c.testCarrier) high = 1;
+            else if (c.station == SN_WWVB) {
+              const bool marker = second == 0 || second % 10 == 9;
+              const int bit = (wwvb_bits >> (59 - second)) & 1ULL;
+              high = tenth >= (marker ? 8 : (bit ? 5 : 2));
+            } else high = secpattern[bits60[second] * 10 + tenth] != 0;
+            const int duty = high ? DUTY_HIGH : DUTY_LOW;
+            if (duty != previousDuty) {
+              state.error = ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_ID, duty);
+              if (state.error == ESP_OK) state.error = ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_ID);
+              previousDuty = state.error == ESP_OK ? duty : -1;
+            }
+            lastSlot = slot;
+          }
+          state.active = state.error == ESP_OK;
+          if (!state.active) {
+            stopCarrier(c.pin);
+            attached = hardwareReady = false;
+          }
+        }
       }
     }
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 's' || buf[0] == 'S') {  // set station
-    char s[] =                                  //"jJkKwWdDhHmMbB"
-      { 'j', 'J', 'k', 'K', 'w', 'W', 'd', 'D', 't', 'T', 'm', 'M', 'c', 'C', '\0' },
-         *chp;
-    if ((chp = strchr(s, buf[1])) != NULL) {
-      setstation((int)(chp - s) / 2);
-      saveSettings();
-      return 1;
-    } else {
-      return 0;
-    }
-  } else if (buf[0] == 'p' || buf[0] == 'P') {  // set radio output pin number
-    // accepts decimal gpio number, e.g., p26
-    int plen = strlen(buf);
-    if (plen < 2 || plen > 3) {
-      return 0;
-    }
-    int newPin = atoi(buf + 1);
-    if (!isSafeAtomPin(newPin)) {
-      LOG_PRINTF("pin not allowed: %d\n", newPin);
-      return 0;
-    }
-    int oldPin = pinRadio;
-    if (oldPin == newPin) {
-      return 1;
-    }
-    stoptimer();
-    pinMode(oldPin, INPUT);        // tristate old pin (Hi-Z)
-    pinRadio = newPin;
-    pinMode(pinRadio, OUTPUT);
-    digitalWrite(pinRadio, LOW);   // new pin ready for LEDC
-    applyDriveStrength();
-    if (txEnabled) {
-      starttimer();
-    }
-    LOG_PRINTF("radio pin set to %d\n", pinRadio);
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'e' || buf[0] == 'E') {  // TX enable/disable
-    if (buf[1] == '0') {
-      setTxState(0);
-      lastCmdResp = String("TX disabled\n");
-    } else if (buf[1] == '1') {
-      setTxState(1);
-      lastCmdResp = String("TX enabled\n");
-    } else {
-      return 0;
-    }
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'g' || buf[0] == 'G') {  // set GPIO drive strength 0..3
-    if (strlen(buf) != 2) {
-      return 0;
-    }
-    int level = buf[1] - '0';
-    if (level < GPIO_DRIVE_CAP_0 || level > GPIO_DRIVE_CAP_3) {
-      return 0;
-    }
-    driveStrength = clampDriveCap(level);
-    applyDriveStrength();
-    LOG_PRINTF("GPIO drive strength set to %d (0=weakest,3=strongest)\n", driveStrength);
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'y' || buf[0] == 'Y') {  // NTP sync
-    if (buf[1] == '0') {
-      ntpsync = 0;
-      ntpstop();
-    } else if (buf[1] == '1') {
-      ntpsync = 1;
-      ntpstart();
-    } else {
-      return 0;
-    }
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'f' || buf[0] == 'F') {  // frequency self-test (jumper radio pin to PIN_MEAS)
-    pinMode(PIN_MEAS, INPUT_PULLDOWN);
-    measCount = 0;
-    overrideCarrier = 1;
-    attachInterrupt(digitalPinToInterrupt(PIN_MEAS), meas_isr, RISING);
-    delay(200);
-    detachInterrupt(digitalPinToInterrupt(PIN_MEAS));
-    overrideCarrier = 0;
-    uint32_t hz = (uint32_t)(measCount * 5);
-    if (hz == 0) {
-      // Fallback: read LEDC timer freq if no edges captured
-      uint32_t ledcHz = ledc_get_freq(LEDC_MODE, LEDC_TIMERIDX);
-      LOG_PRINTF("no edges on GPIO%d; LEDC timer reports ~%u Hz (expected ~%d Hz)\n",
-                 PIN_MEAS, ledcHz, radiodiv * 500);
-      lastCmdResp = String("no edges on GPIO") + String(PIN_MEAS) + String("; LEDC ~") + String(ledcHz) + String(" Hz (expected ~") + String(radiodiv * 500) + String(" Hz)\n");
-    } else {
-      LOG_PRINTF("measured ~%u Hz on GPIO%d (expected ~%d Hz)\n",
-                 hz, PIN_MEAS, radiodiv * 500);
-      lastCmdResp = String("measured ~") + String(hz) + String(" Hz on GPIO") + String(PIN_MEAS) + String(" (expected ~") + String(radiodiv * 500) + String(" Hz)\n");
-    }
-    return 1;
-  } else if (buf[0] == 'n' || buf[0] == 'N') {  // WWVB next-minute encoding off/on
-    if (buf[1] == '0') {
-      wwvbEncodeNextMinute = 0;
-    } else if (buf[1] == '1') {
-      wwvbEncodeNextMinute = 1;
-    } else {
-      return 0;
-    }
-    LOG_PRINTF("WWVB next-minute encoding: %s (compatibility only; framing follows txtempus)\n", wwvbEncodeNextMinute ? "on" : "off");
-    return 1;
-  } else if (buf[0] == 'x' || buf[0] == 'X') {  // DST override
-    if (buf[1] == '0') dstOverride = 0;         // STD
-    else if (buf[1] == '1') dstOverride = 1;    // DST
-    else if (buf[1] == '2') dstOverride = 2;    // AUTO
-    else return 0;
-    LOG_PRINTF("DST override: %s (DCF/MSF only; WWVB uses TZ-derived DST)\n", dstOverride == 2 ? "auto" : (dstOverride ? "DST" : "STD"));
-    saveSettings();
-    return 1;
-  } else if (buf[0] == 'r' || buf[0] == 'R') {  // reset to defaults and clear persisted settings
-    applyDefaultSettings();
-    // Clear saved prefs so next boot uses defaults
-    prefs.begin("clocksync", false);
-    prefs.clear();
-    prefs.end();
-    LOG_PRINTLN("settings reset to defaults");
-    lastCmdResp = String("settings reset to defaults\n");
-    return 1;
-  } else if (buf[0] == 'h' || buf[0] == 'H') {  // help
-    printhelp();
-    return 1;
-  }
-  return 0;
-}
-
-int a2toi(char *chp) {
-  int v = 0;
-  for (int i = 0; i < 2; chp++, i++) {
-    if (*chp < '0' || '9' < *chp) {
-      return -1;
-    }
-    v = v * 10 + (*chp - '0');
-  }
-  return v;
-}
-
-
-void printbits60(void) {
-  LOG_PRINT("\n");
-  for (int i = 0; i < 60; i++) {
-    LOG_PRINT(bits60[i]);
-  }
-  LOG_PRINT("\n");
-  return;
-}
-
-void printhelp(void) {
-  LOG_PRINTF("clocksync v%s\n\n", VERSION);
-  LOG_PRINTLN("Status:");
-  LOG_PRINTF("  Station : %s\n", stationNames[currentStation]);
-  LOG_PRINTF("  TX      : %s\n", txEnabled ? "enabled" : "disabled");
-  int carrierHz = radiodiv * 500;  // radiodiv is double-freq in kHz
-  LOG_PRINTF("  Carrier : %d Hz (%.1f kHz)\n", carrierHz, (float)carrierHz / 1000.0);
-  LOG_PRINTF("  Pin     : GPIO %d\n", pinRadio);
-  LOG_PRINTF("  Drive   : %d (0=weak, 3=strong)\n", driveStrength);
-  LOG_PRINTF("  NTP     : %s\n", ntpsync ? "on" : "off");
-  LOG_PRINTF("  TZ      : %s\n", TZ);
-  LOG_PRINTF("  Buzzer  : %s\n", buzzsw ? "on" : "off");
-  LOG_PRINTF("  DST ov  : %s (DCF/MSF only; WWVB uses TZ-derived DST)\n", dstOverride == 2 ? "auto" : (dstOverride ? "DST" : "STD"));
-  LOG_PRINTF("  WWVB    : txtempus framing; time=UTC; DST bits from TZ (%s).\n", TZ);
-
-  LOG_PRINTLN("\nCommands:");
-  LOG_PRINTLN("  h           : show this help");
-  LOG_PRINTLN("  e0|e1       : TX disable/enable (stop/start carrier + modulation)");
-  LOG_PRINTLN("  y0|y1       : NTP sync off/on");
-  LOG_PRINTLN("  dYYMMDD     : set date (interpreted in local TZ)");
-  LOG_PRINTLN("  tHHmmSS     : set time and restart tick (local TZ)");
-  LOG_PRINTLN("  z0|z1       : buzzer off/on");
-  LOG_PRINTLN("  l0|l1       : LED off/on");
-  LOG_PRINTLN("  pNN         : set radio output pin (e.g., p25)");
-  LOG_PRINTLN("  g0|g1|g2|g3 : set GPIO drive (0=weakest,3=strongest)");
-  LOG_PRINTLN("  f           : self-test: jumper radio pin to GPIO33, measure carrier");
-  LOG_PRINTLN("  n0|n1       : (WWVB) legacy framing toggle — ignored; always txtempus framing");
-  LOG_PRINTLN("  x0|x1|x2    : force DST STD/DST/AUTO (DCF/MSF only; WWVB uses TZ)");
-  LOG_PRINTLN("  sX          : set station to X (one of):");
-  for (int i = 0; i < 7; i++) {
-    LOG_PRINTF("    s%c : %s\n", stationCmds[i], stationNames[i]);
+    state.light = clocksync::statusLight(c.led && (PIN_LED >= 0 || PIN_RGB_LED >= 0), c.requested, c.wifiConnected, trust.synced,
+        fresh, state.active, state.error != 0, monotonic - trust.lastSyncUs);
+    indicator(state.light);
+    publishRadio(state);
+    // Wall-clock sampling avoids accumulated tick drift and catches NTP corrections.
+    // No HTTP, flash writes, logging or network operations run in this task.
+    vTaskDelay(1);
   }
 }
 
+bool safePin(int p) {
+  const int pins[] = {19,21,22,23,25,26,32,33};
+  for (int n : pins) if (p == n) return true;
+  return false;
+}
 
-// ------------------------- Web server ---------------------------------
-String generateStatusText(void) {
-  String s;
-  s.reserve(512);
-  // Capture current time at generation
-  getlocaltime();
-  s += "clocksync v"; s += VERSION; s += "\n\n";
-  s += "Status:\n";
-  s += "  Station : "; s += stationNames[currentStation]; s += "\n";
-  s += "  TX      : "; s += (txEnabled ? "enabled" : "disabled"); s += "\n";
-  int chz = radiodiv * 500;
-  s += "  Carrier : "; s += String(chz); s += " Hz ("; s += String((float)chz / 1000.0f, 1); s += " kHz)\n";
-  s += "  Pin     : GPIO "; s += String(pinRadio); s += "\n";
-  s += "  Drive   : "; s += String(driveStrength); s += " (0=weak,3=strong)\n";
-  s += "  NTP     : "; s += (ntpsync ? "on" : "off"); s += "\n";
-  s += "  TZ      : "; s += TZ; s += "\n";
-  s += "  Buzzer  : "; s += (buzzsw ? "on" : "off"); s += "\n";
-  s += "  LED     : "; s += (ledEnabled ? "on" : "off"); s += "\n";
-  s += "  DST ov  : "; s += (dstOverride==2?"auto":(dstOverride?"DST":"STD")); s += " (DCF/MSF only; WWVB uses TZ-derived DST)\n";
-  s += "  WWVB    : txtempus framing; time=UTC; DST bits from TZ ("; s += TZ; s += ").\n";
-  char tbuf[48];
-  snprintf(tbuf, sizeof(tbuf), "  Now     : %04d-%02d-%02d %02d:%02d:%02d (local)\n",
-           nowtm.tm_year + 1900, nowtm.tm_mon + 1, nowtm.tm_mday,
-           nowtm.tm_hour, nowtm.tm_min, nowtm.tm_sec);
-  s += tbuf;
-  s += "\nCommands:\n";
-  s += "  h           : show this help\n";
-  s += "  e0|e1       : TX disable/enable (stop/start carrier + modulation)\n";
-  s += "  y0|y1       : NTP sync off/on\n";
-  s += "  dYYMMDD     : set date (interpreted in local TZ)\n";
-  s += "  tHHmmSS     : set time and restart tick (local TZ)\n";
-  s += "  z0|z1       : buzzer off/on\n";
-  s += "  l0|l1       : LED off/on\n";
-  s += "  pNN         : set radio output pin (e.g., p25)\n";
-  s += "  g0|g1|g2|g3 : set GPIO drive (0=weakest,3=strongest)\n";
-  s += "  f           : self-test: jumper radio pin to GPIO33, measure carrier\n";
-  s += "  n0|n1       : (WWVB) legacy framing toggle — ignored; always txtempus framing\n";
-  s += "  x0|x1|x2    : force DST STD/DST/AUTO (DCF/MSF only; WWVB uses TZ)\n";
-  s += "  sX          : set station to X (one of):\n";
-  for (int i = 0; i < 7; i++) {
-    s += "    s"; s += stationCmds[i]; s += " : "; s += stationNames[i]; s += "\n";
+void saveSettings() {
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  prefs.begin("clocksync", false);
+  prefs.putInt("station", c.station); prefs.putInt("tx", c.requested);
+  prefs.putInt("pin", c.pin); prefs.putInt("drive", c.drive);
+  prefs.putInt("dst", c.dst); prefs.putInt("led", c.led);
+  prefs.putInt("ntp", ntpsync);
+  prefs.end();
+}
+
+void loadSettings() {
+  prefs.begin("clocksync", true);
+  const int station = prefs.getInt("station", SN_DEFAULT);
+  const int pin = prefs.getInt("pin", PIN_RADIO);
+  control.station = station >= 0 && station <= SN_BPC ? station : SN_DEFAULT;
+  control.pin = safePin(pin) ? pin : PIN_RADIO;
+  control.requested = prefs.getInt("tx", 1) != 0;
+  control.led = prefs.getInt("led", 1) != 0;
+  control.drive = constrain(prefs.getInt("drive", GPIO_DRIVE_CAP_2), 0, 3);
+  control.dst = constrain(prefs.getInt("dst", 2), 0, 2);
+  ntpsync = prefs.getInt("ntp", 1) != 0;
+  prefs.end();
+  // Time trust deliberately never persists across a reboot.
+}
+
+void requestSync() {
+  ntpsync = true;
+  syncRequested = true;
+}
+
+void serviceNetwork() {
+  wifiConfiguration.service();
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  const uint32_t ms = millis();
+  portENTER_CRITICAL(&stateMux);
+  control.wifiConnected = connected;
+  portEXIT_CRITICAL(&stateMux);
+  if (connected && !mdnsStarted && (!mdnsAttempted || ms - lastMdnsAttempt >= RETRY_MS)) {
+    mdnsAttempted = true;
+    lastMdnsAttempt = ms;
+    mdnsStarted = MDNS.begin(DEVICENAME);
+    if (mdnsStarted) MDNS.addService("http", "tcp", 80);
+  } else if (!connected && mdnsStarted) {
+    MDNS.end(); mdnsStarted = false; mdnsAttempted = false;
   }
+  if (connected && ntpsync && (!ntpConfigured || !wasConnected || syncRequested)) {
+    if (!ntpKicked || ms - lastNtpKick >= RETRY_MS) {
+      // Registers SNTP without waiting for a response. Periodic refresh stays enabled.
+      esp_sntp_set_sync_interval(clocksync::NTP_INTERVAL_MS);
+      configTzTime(TZ, "pool.ntp.org", "time.nist.gov");
+      ntpConfigured = ntpKicked = true;
+      syncRequested = false;
+      lastNtpKick = ms;
+    }
+  }
+  wasConnected = connected;
+}
+
+const char *stateName(const Control &c, const clocksync::TimeTrust &t, const RadioStatus &r, int64_t us) {
+  if (!c.requested) return "paused";
+  if (r.error) return "error";
+  if (!t.synced) return "waiting";
+  if (!t.fresh(us)) return "stale";
+  if (r.active) return "transmitting";
+  return "aligning";
+}
+
+String generateStatusJSON() {
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  const int64_t us = esp_timer_get_time();
+  struct timeval tv; gettimeofday(&tv, nullptr);
+  struct tm display = {};
+  localtime_r(&tv.tv_sec, &display);
+  char local[40], last[40];
+  strftime(local, sizeof(local), "%Y-%m-%d %H:%M:%S", &display);
+  last[0] = '\0';
+  if (t.synced) {
+    struct tm lt; localtime_r(&t.lastSyncEpoch, &lt);
+    strftime(last, sizeof(last), "%Y-%m-%d %H:%M:%S", &lt);
+  }
+  String s; s.reserve(800);
+  s += "{\"version\":\"" VERSION "\",\"state\":\"";
+  s += stateName(c,t,r,us);
+  s += "\",\"requested\":"; s += c.requested ? "true" : "false";
+  s += ",\"active\":"; s += r.active && c.requested && t.fresh(us) ? "true" : "false";
+  s += ",\"wifi\":"; s += WiFi.status() == WL_CONNECTED ? "true" : "false";
+  s += ",\"ntp\":"; s += ntpsync ? "true" : "false";
+  s += ",\"syncPending\":"; s += syncRequested ? "true" : "false";
+  s += ",\"station\":"; s += c.station;
+  s += ",\"stationName\":\""; s += stationNames[c.station]; s += '"';
+  s += ",\"frequency\":"; s += r.frequency;
+  s += ",\"targetFrequency\":"; s += st_cycle2[c.station] * 500;
+  s += ",\"pin\":"; s += c.pin;
+  s += ",\"drive\":"; s += c.drive;
+  s += ",\"dst\":"; s += c.dst;
+  s += ",\"led\":"; s += c.led ? "true" : "false";
+  const char *lightNames[] = {"off", "green", "yellow", "red", "stopped"};
+  s += ",\"ledState\":\""; s += lightNames[(int)r.light]; s += '"';
+  s += ",\"setupAP\":"; s += wifiConfiguration.portalActive() ? "true" : "false";
+  s += ",\"localTime\":\""; s += t.synced ? local : ""; s += '"';
+  s += ",\"localMilliseconds\":"; s += (long)(tv.tv_usec / 1000);
+  s += ",\"lastSync\":\""; s += last; s += '"';
+  s += ",\"syncAgeSeconds\":"; s += t.synced ? (long)((us - t.lastSyncUs) / 1000000) : -1L;
+  s += ",\"remainingSeconds\":"; s += t.remainingSeconds(us);
+  s += ",\"heap\":"; s += ESP.getFreeHeap();
+  s += ",\"radioError\":"; s += r.error;
+  s += '}';
   return s;
 }
 
-void handleStatus(void) {
-  String s = generateStatusText();
-  server.send(200, "text/plain", s);
+String generateStatusText() {
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  const int64_t us = esp_timer_get_time();
+  String s; s.reserve(500);
+  s += "clocksync " VERSION "\nState: "; s += stateName(c,t,r,us);
+  s += "\nStation: "; s += stationNames[c.station];
+  s += "\nCarrier configured: "; s += r.frequency; s += " Hz";
+  s += "\nCarrier requested: "; s += st_cycle2[c.station] * 500; s += " Hz";
+  s += "\nGPIO: "; s += c.pin;
+  s += "\nNTP sync confirmed: "; s += t.synced ? "yes" : "no";
+  s += "\nHoldover remaining: "; s += t.remainingSeconds(us); s += " seconds";
+  s += "\nTimezone: " TZ "\n";
+  return s;
 }
 
-void handleCmd(void) {
-  if (!server.hasArg("c")) {
-    server.send(400, "text/plain", "missing c param\n");
-    return;
-  }
-  String arg = server.arg("c");
-  if (arg.length() == 0 || arg.length() >= 127) {
-    server.send(400, "text/plain", "bad c param\n");
-    return;
-  }
-  char buf[128];
-  memcpy(buf, arg.c_str(), arg.length());
-  buf[arg.length()] = '\0';
-  int ok = docmd(buf);
-  String s;
-  if (ok) {
-    s = String("OK\n");
-    if (lastCmdResp.length() > 0) {
-      s += lastCmdResp;
-      lastCmdResp = String();
+void IRAM_ATTR meas_isr() { measCount = measCount + 1; }
+
+int docmd(char *buf) {
+  const size_t n = strlen(buf);
+  if (!n) return 0;
+  lastCmdResp = "";
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  const char command = tolower((unsigned char)buf[0]);
+  bool save = false;
+  if (command == 'h' && n == 1) {
+    Serial.print(generateStatusText());
+    Serial.println("e0/e1 pause/resume; u sync now; sX station (j,k,w,d,t,m,c); pNN pin; g0..3 drive; l0/l1 LED; y0/y1 NTP; x0..2 DST; f frequency test; r defaults.");
+    return 1;
+  } else if (command == 'u' && n == 1) {
+    requestSync(); save = true; lastCmdResp = "Time sync requested";
+  } else if (command == 'e' && n == 2 && (buf[1] == '0' || buf[1] == '1')) {
+    c.requested = buf[1] == '1'; save = true;
+  } else if (command == 'l' && n == 2 && (buf[1] == '0' || buf[1] == '1')) {
+    c.led = buf[1] == '1'; save = true;
+  } else if (command == 'g' && n == 2 && buf[1] >= '0' && buf[1] <= '3') {
+    c.drive = buf[1] - '0'; save = true;
+  } else if (command == 'x' && n == 2 && buf[1] >= '0' && buf[1] <= '2') {
+    c.dst = buf[1] - '0'; save = true;
+  } else if (command == 's' && n == 2) {
+    const char *p = strchr(stationCmds, tolower((unsigned char)buf[1]));
+    if (!p) return 0;
+    c.station = p - stationCmds; save = true;
+  } else if (command == 'p' && n >= 2 && n <= 3) {
+    for (size_t i=1;i<n;++i) if (!isdigit((unsigned char)buf[i])) return 0;
+    const int pin = atoi(buf+1); if (!safePin(pin)) return 0;
+    c.pin = pin; save = true;
+  } else if (command == 'y' && n == 2 && (buf[1] == '0' || buf[1] == '1')) {
+    ntpsync = buf[1] == '1';
+    if (ntpsync) requestSync();
+    else { esp_sntp_stop(); ntpConfigured = false; syncRequested = false; }
+    save = true;
+  } else if (command == 'f' && n == 1) {
+    if (!r.active || !t.fresh(esp_timer_get_time()) || c.pin == PIN_MEAS) return 0;
+    pinMode(PIN_MEAS, INPUT_PULLDOWN); measCount = 0;
+    portENTER_CRITICAL(&stateMux); control.testCarrier = true; portEXIT_CRITICAL(&stateMux);
+    attachInterrupt(digitalPinToInterrupt(PIN_MEAS), meas_isr, RISING);
+    delay(200);  // radioTask remains independent of this diagnostic wait
+    detachInterrupt(digitalPinToInterrupt(PIN_MEAS));
+    portENTER_CRITICAL(&stateMux); control.testCarrier = false; portEXIT_CRITICAL(&stateMux);
+    lastCmdResp = String("Measured approximately ") + String(measCount * 5) + " Hz; interrupts modulation during test";
+    return 1;
+  } else if (command == 'r' && n == 1) {
+    c = Control(); requestSync(); save = true;
+  } else if ((command == 'd' || command == 't') && n == 7) {
+    for (size_t i=1;i<n;++i) if (!isdigit((unsigned char)buf[i])) return 0;
+    time_t epoch = time(nullptr); struct tm edited; localtime_r(&epoch,&edited);
+    const int a = (buf[1]-'0')*10+buf[2]-'0', b=(buf[3]-'0')*10+buf[4]-'0', d=(buf[5]-'0')*10+buf[6]-'0';
+    if (command == 'd') {
+      if (b<1||b>12||d<1||d>31) return 0;
+      edited.tm_year=a+100; edited.tm_mon=b-1; edited.tm_mday=d;
+    } else {
+      if(a>23||b>59||d>59) return 0;
+      edited.tm_hour=a; edited.tm_min=b; edited.tm_sec=d;
     }
-  } else {
-    s = String("ERR\n");
+    edited.tm_isdst=-1;
+    // An arbitrary clock edit must not inherit trust from an earlier NTP sync.
+    portENTER_CRITICAL(&stateMux);
+    control.editingTime = true;
+    ++timeEditGeneration;
+    timeTrust.synced = false;
+    portEXIT_CRITICAL(&stateMux);
+    struct timeval tv = {}; tv.tv_sec=mktime(&edited); settimeofday(&tv,nullptr);
+    portENTER_CRITICAL(&stateMux);
+    timeTrust.synced = false;
+    ++timeEditGeneration;
+    control.editingTime = false;
+    portEXIT_CRITICAL(&stateMux);
+    if(ntpsync) requestSync();
+    lastCmdResp="Manual time set; a new NTP sync is required before transmission";
+    return 1;
+  } else if ((command == 'z' || command == 'n') && n == 2 && (buf[1]=='0'||buf[1]=='1')) {
+    lastCmdResp="Legacy option has no effect on Atom Lite";
+    return 1;
+  } else return 0;
+  if (save) {
+    portENTER_CRITICAL(&stateMux); control=c; portEXIT_CRITICAL(&stateMux);
+    saveSettings();
   }
-  server.send(200, "text/plain", s);
+  return 1;
 }
 
-void handleRoot(void) {
-  String s;
-  s.reserve(1400);
-  s += "<!doctype html><meta charset=\"utf-8\"><title>"; s += DEVICENAME; s += "</title>";
-  s += "<style>body{font-family:monospace;white-space:pre-wrap;margin:16px;}input,button,select{font-family:monospace;}#msg,#drvmsg{margin-left:8px;color:#080}</style>";
-  s += "<h3>"; s += DEVICENAME; s += "</h3>";
-  s += "<div><form id=\"cmdform\">cmd: <input id=\"cmd\" name=\"c\" size=\"20\" autocomplete=\"off\"><button type=\"submit\">Send</button><span id=\"msg\"></span></form></div>";
-  s += "<div style=\"margin-top:8px;\">GPIO drive (0=weak..3=strong): <select id=\"drive\"><option value=\"0\">0 (weakest)</option><option value=\"1\">1</option><option value=\"2\">2</option><option value=\"3\">3 (strongest)</option></select> <button id=\"setDrive\" type=\"button\">Apply</button><span id=\"drvmsg\"></span></div>";
-  s += "<hr><div><a href=\"/status.txt\" target=\"_blank\">status.txt</a></div><pre id=\"status\">";
-  s += generateStatusText();
-  s += "</pre><script>(function(){\n";
-  s += "function fetchStatus(){return fetch('/status.txt',{cache:'no-store'}).then(r=>r.text()).then(t=>{document.getElementById('status').textContent=t;});}\n";
-  s += "document.getElementById('cmdform').addEventListener('submit',function(ev){ev.preventDefault();var i=document.getElementById('cmd');var m=document.getElementById('msg');m.textContent='';var v=i.value.trim();if(!v){return;}fetch('/cmd?c='+encodeURIComponent(v)).then(r=>r.text()).then(t=>{m.style.color=(t.indexOf('OK')===0)?'#080':'#a00';m.textContent=t.trim();i.select();return fetchStatus();}).catch(()=>{m.style.color='#a00';m.textContent='ERR';});});\n";
-  s += "var driveSel=document.getElementById('drive');driveSel.value='"; s += driveStrength; s += "';\n";
-  s += "document.getElementById('setDrive').addEventListener('click',function(ev){ev.preventDefault();var dmsg=document.getElementById('drvmsg');dmsg.textContent='';fetch('/cmd?c=g'+encodeURIComponent(driveSel.value)).then(r=>r.text()).then(t=>{var ok=(t.indexOf('OK')===0);dmsg.style.color=ok?'#080':'#a00';dmsg.textContent=ok?'updated':'ERR';return ok?fetchStatus():null;}).catch(()=>{dmsg.style.color='#a00';dmsg.textContent='ERR';});});\n";
-  // No periodic refresh to minimize WiFi usage
-  s += "})();</script>";
-  s += "</div></body></html>";
-  server.send(200, "text/html", s);
+bool parseField(const char *name, int &value) {
+  if (!server.hasArg(name)) return false;
+  const String s = server.arg(name);
+  if (s.length() == 0 || s.length() > 3) return false;
+  for (size_t i=0; i<s.length(); ++i) if(!isdigit((unsigned char)s[i])) return false;
+  value=s.toInt(); return true;
 }
 
-void setupWebServer(void) {
-  server.on("/", handleRoot);
-  server.on("/status.txt", HTTP_GET, handleStatus);
-  server.on("/cmd", HTTP_GET, handleCmd);
-  
+void handleSettings() {
+  int station,pin,drive,led,dst;
+  if(!parseField("station",station)||!parseField("pin",pin)||!parseField("drive",drive)||
+     !parseField("led",led)||!parseField("dst",dst)||station>SN_BPC||!safePin(pin)||drive>3||led>1||dst>2) {
+    server.send(400,"text/plain","Invalid settings"); return;
+  }
+  portENTER_CRITICAL(&stateMux);
+  control.station=station; control.pin=pin; control.drive=drive;
+  control.led=led!=0; control.dst=dst;
+  portEXIT_CRITICAL(&stateMux);
+  saveSettings();
+  server.sendHeader("Cache-Control","no-store");
+  server.send(200,"application/json; charset=utf-8",generateStatusJSON());
+}
 
-  server.onNotFound([](){ server.send(404, "text/plain", "not found\n"); });
+void setupWebServer() {
+  wifiConfiguration.registerRoutes();
+  server.on("/api/settings", HTTP_POST, handleSettings);
+  server.on("/", HTTP_GET, [](){
+    server.sendHeader("Cache-Control", "no-store");
+    server.send_P(200, "text/html; charset=utf-8", wifiConfiguration.portalClient() ? WIFI_SETUP_UI : WEB_UI);
+  });
+  server.on("/api/status", HTTP_GET, [](){
+    server.sendHeader("Cache-Control","no-store");
+    server.send(200,"application/json; charset=utf-8",generateStatusJSON());
+  });
+  server.on("/status.txt", HTTP_GET, [](){ server.send(200,"text/plain; charset=utf-8",generateStatusText()); });
+  server.on("/cmd", HTTP_ANY, [](){
+    if (!server.hasArg("c") || server.arg("c").length()==0 || server.arg("c").length()>126) {
+      server.send(400,"text/plain","ERR"); return;
+    }
+    char buf[128]; server.arg("c").toCharArray(buf,sizeof(buf));
+    const bool ok=docmd(buf);
+    server.send(ok?200:400,"text/plain; charset=utf-8",ok?String("OK\n")+lastCmdResp:String("ERR\n"));
+  });
+  server.onNotFound([](){ server.send(404,"text/plain","Not found"); });
   server.begin();
-  if (WiFi.status() == WL_CONNECTED) {
-    // Note: MDNS.begin(DEVICENAME) is called explicitly in setup().
-    // We just need to add the service here.
-    MDNS.begin(DEVICENAME);
-    MDNS.addService("http", "tcp", 80);
-    LOG_PRINTF("HTTP server: http://%s.local/\n", DEVICENAME);
-  } else {
-    LOG_PRINTLN("HTTP server started (WiFi not connected yet)");
-  }
 }
 
-
-
-void ntpstart(void) {
-  int i;
-
-  // WiFi, NTP setup
-  LOG_PRINT("Attempting to connect to Network named: ");
-  LOG_PRINTLN(ssid);  // print the network name (SSID);
-  WiFi.begin(ssid, passwd);
-  for (i = 0; i < 10 && WiFi.status() != WL_CONNECTED; i++) {
-    LOG_PRINT(".");
-    delay(1000);
-  }
-  if (i == 10) {
-    ntpsync = 0;
-    return;
-  }
-  IPAddress ip = WiFi.localIP();
-  LOG_PRINTF("IP Address: ");
-  LOG_PRINTLN(ip);
-  LOG_PRINTF("configuring NTP timezone...");
-  // Use POSIX TZ string for automatic DST handling (see TZ macro)
-  configTzTime(TZ, "pool.ntp.org", "time.nist.gov");
-  for (int i = 0; i < 10 && !getLocalTime(&nowtm); i++) {
-    LOG_PRINTF(".");
-    delay(1000);
-  }
-  if (i == 10) {
-    ntpsync = 0;
-    return;
-  }
-  LOG_PRINTF("done\n");
+void setup() {
+  Serial.begin(115200);
+#if PIN_LED >= 0
+  pinMode(PIN_LED,OUTPUT);
+#endif
+#if PIN_BUTTON >= 0
+  // GPIO34-39 have no internal pull-ups; Atom Lite supplies its own on GPIO39.
+  pinMode(PIN_BUTTON, PIN_BUTTON >= 34 ? INPUT : INPUT_PULLUP);
+#endif
+  indicator(clocksync::StatusLight::Off);
+  setenv("TZ",TZ,1); tzset();
+  loadSettings();
+  pinMode(control.pin,INPUT);
+  esp_sntp_set_time_sync_notification_cb(onTimeSync);
+#if HAS_WIFI_SECRETS
+  wifiConfiguration.begin(DEVICENAME, WIFI_SSID, WIFI_PASS);
+#else
+  wifiConfiguration.begin(DEVICENAME);
+#endif
+  setupWebServer();
+  const BaseType_t taskOk=xTaskCreatePinnedToCore(radioTask,"radio",6144,nullptr,4,nullptr,1);
+  if(taskOk!=pdPASS) { RadioStatus r; r.error=ESP_ERR_NO_MEM; publishRadio(r); }
+  Serial.println("clocksync " VERSION " ready. Waiting for confirmed NTP time.");
+  Serial.println("http://" DEVICENAME ".local  |  short press: pause/resume; hold 3s: sync");
 }
 
-
-void ntpstop(void) {
-  ntpsync = 0;
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-}
-
-
-void setlocaltime(void) {
-  time_t nowtime = mktime(&nowtm) /*+ TZ */;
-  struct timeval tv = {
-    .tv_sec = nowtime
-  };
-  settimeofday(&tv, NULL);
-  getlocaltime();  // to make wday/yday
-}
-
-
-void getlocaltime(void) {
-  if (ntpsync) {
-    getLocalTime(&nowtm);
-  } else {
-    time_t nowtime;
-    time(&nowtime);
-    struct tm *ntm;
-    ntm = localtime(&nowtime);
-    nowtm = *ntm;
+void loop() {
+  serviceNetwork();
+  bool pressed = false;
+#if PIN_BUTTON >= 0
+  pressed = digitalRead(PIN_BUTTON) == LOW;
+#endif
+  const uint32_t buttonMs = millis();
+  const auto action=button.update(buttonInput.update(pressed,buttonMs),buttonMs);
+  if(action==clocksync::ButtonAction::Toggle) {
+    portENTER_CRITICAL(&stateMux); control.requested=!control.requested; portEXIT_CRITICAL(&stateMux);
+    saveSettings();
+  } else if(action==clocksync::ButtonAction::Sync) {
+    requestSync(); saveSettings();
   }
-}
-
-// Allowed radio output pins on Atom Lite (avoid 12, 27, 39, bootstraps)
-int isSafeAtomPin(int p) {
-  // Common breakouts and HY2.0
-  int allowed[] = { 19, 21, 22, 23, 25, 26, 32, 33 };
-  for (unsigned i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
-    if (p == allowed[i]) {
-      return 1;
-    }
+  static char command[128]; static size_t length=0; static bool overflow=false;
+  while(Serial.available()) {
+    const char c=Serial.read();
+    if(c=='\n'||c=='\r') {
+      if(!overflow && length) { command[length]='\0'; if(!docmd(command)) Serial.println("ERR"); }
+      length=0; overflow=false;
+    } else if(length<sizeof(command)-1) command[length++]=c;
+    else overflow=true;
   }
-  return 0;
-}
-
-int clampDriveCap(int cap) {
-  if (cap < (int)GPIO_DRIVE_CAP_0) return GPIO_DRIVE_CAP_0;
-  if (cap > (int)GPIO_DRIVE_CAP_3) return GPIO_DRIVE_CAP_3;
-  return cap;
-}
-
-void applyDriveStrength(void) {
-  driveStrength = clampDriveCap(driveStrength);
-  gpio_set_drive_capability((gpio_num_t)pinRadio, (gpio_drive_cap_t)driveStrength);
-}
-
-// ------------------------- Persistence (Preferences) -------------------------
-void saveSettings(void) {
-  prefs.begin("clocksync", false);
-  prefs.putInt("station", currentStation);
-  prefs.putInt("tx", txEnabled);
-  prefs.putInt("pin", pinRadio);
-  prefs.putInt("ntp", ntpsync);
-  prefs.putInt("buzz", buzzsw);
-  prefs.putInt("dst", dstOverride);
-
-  prefs.putInt("led", ledEnabled);
-  prefs.putInt("drive", driveStrength);
-  prefs.end();
-}
-
-void loadSettings(void) {
-  prefs.begin("clocksync", true);
-  int v;
-  v = prefs.getInt("station", -1);
-  if (v >= 0 && v <= SN_BPC) {
-    currentStation = v;
-  }
-  v = prefs.getInt("tx", -1);
-  if (v == 0 || v == 1) {
-    txEnabled = v;
-  }
-  v = prefs.getInt("pin", -1);
-  if (v >= 0 && isSafeAtomPin(v)) {
-    pinRadio = v;
-  }
-  v = prefs.getInt("ntp", -1);
-  if (v == 0 || v == 1) {
-    ntpsync = v;
-  }
-  v = prefs.getInt("buzz", -1);
-  if (v == 0 || v == 1) {
-    buzzsw = v;
-  }
-  v = prefs.getInt("dst", -1);
-  if (v == 0 || v == 1 || v == 2) {
-    dstOverride = v;
-  }
-  v = prefs.getInt("led", -1);
-  if (v == 0 || v == 1) {
-    ledEnabled = v;
-  }
-  v = prefs.getInt("drive", -1);
-  if (v >= GPIO_DRIVE_CAP_0 && v <= GPIO_DRIVE_CAP_3) {
-    driveStrength = v;
-  }
-  prefs.end();
-}
-
-void applyDefaultSettings(void) {
-  // Reset radio pin if changed
-  int defaultPin = PIN_RADIO;
-  if (pinRadio != defaultPin) {
-    stoptimer();
-    pinMode(pinRadio, INPUT);      // tristate old pin (Hi-Z)
-    pinRadio = defaultPin;
-    pinMode(pinRadio, OUTPUT);
-    digitalWrite(pinRadio, LOW);   // new pin ready for LEDC
-  }
-  driveStrength = GPIO_DRIVE_CAP_2;
-  applyDriveStrength();
-  // Defaults
-  txEnabled = 1;
-  buzzsw = 0;
-  dstOverride = 2;
-  // NTP default: on
-  ntpstop();
-  ntpsync = 1;
-  ntpstart();
-  // Station default
-  setstation(SN_DEFAULT);
+  server.handleClient();
+  delay(1);
 }

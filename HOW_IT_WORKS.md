@@ -2,6 +2,8 @@
 
 This document details the low-level signal generation techniques and station protocol specifications used by `clocksync`. It is designed to provide sufficient detail for a skilled engineer to reimplement the logic on another platform.
 
+Fork-specific DCF77 reliability, time safeguards, controls, Wi-Fi configuration and web interface improvements are credited to **axelaberg91**. See the README credits for the upstream authors and reference projects.
+
 ## Architecture
 
 ### Carrier Generation
@@ -16,11 +18,15 @@ The system simulates AM by dynamically adjusting the PWM duty cycle of the carri
 *   **Low Power (P_low)**: Duty cycle `14/255` (~5.5%). This effectively attenuates the radiated power to simulate the "dipped" carrier state.
 *   **Note**: This is not true analog AM, but "PWM-based attenuation". It works effectively for near-field magnetic coupling because the receiver's AGC treats the reduced duty cycle as a lower signal strength.
 
-### Precise Timing
-To ensure robust signal decoding by clocks, symbol timing must be precise and drift-free.
-1.  **Alignment**: An `esp_timer` ("align_timer") fires exactly at the next wall-clock second boundary (calculated via `gettimeofday` and microsecond offsets).
-2.  **Tick Loop**: Once aligned, the `tick_timer` runs periodically every **100 ms**.
-3.  **Jitter-Free**: By using hardware timers instead of `delay()` in the main loop, we avoid modulation jitter caused by WiFi activity or web server processing.
+### Timing and time validity
+
+LEDC generates the carrier continuously in hardware. A dedicated FreeRTOS task on core 1 samples `gettimeofday()` each scheduler tick and derives the current 100 ms modulation slot from absolute time. It writes the duty only when it changes. HTTP handling, Wi-Fi reconnects, serial logging and preference saves run outside that task.
+
+This avoids accumulated tick drift and main-loop delays. It is not a hard real-time guarantee: scheduler latency, interrupts and flash operations can still affect modulation edges and need measurement on hardware.
+
+The radio task owns encoder buffers and calendar state. Web status uses separate snapshots and never updates the frame being transmitted. Configuration changes, a newly valid clock or a wall-clock step greater than 50 ms stop the current output and wait for the next full minute before starting a complete frame.
+
+Only the SNTP notification callback records time trust. Its age is measured with `esp_timer_get_time()`; Wi-Fi state and manual clock edits cannot refresh it. At 23 hours since the last confirmed reply, or before the first reply after boot, the carrier is stopped and the GPIO is set to input. A user pause is kept separate from this eligibility check. The RGB LED reports Wi-Fi/time health and actual transmission eligibility, not modulation pulses. Green means normal transmission, yellow means waiting/alignment or a sync age of at least 3 h 15 min, red means Wi-Fi is disconnected, and blinking red means time expiry or a radio error stopped transmission. User pause and the LED-off setting take precedence. The core RGB/RMT driver updates only when the visible color changes.
 
 ---
 
@@ -37,7 +43,7 @@ The original `nisejjy` implementation (and many simple Arduino emulators) often 
 `clocksync` adopts the `txtempus` philosophy:
 1.  **UTC Base**: The framing bits (Minute, Hour, Day, Year) are populated using `gmtime()` (UTC).
 2.  **DST Flags**: Bit 57 ("DST Tomorrow") and Bit 58 ("DST Now") are derived from the POSIX TZ setting via `localtime_r()`. For correct WWVB operation, `#define TZ` must be set to a US timezone (e.g., `"PST8PDT,M3.2.0,M11.1.0"`).
-3.  **Result**: The signal is indistinguishable from the real WWVB station. Your clock behaves exactly as it would with a real signal (correctly applying your local timezone settings).
+3. **Scope**: This describes the retained upstream WWVB implementation. Only DCF77 has been reviewed in this fork; this is not a complete reproduction of a national time service.
 
 > **Reference**: [github.com/hzeller/txtempus](https://github.com/hzeller/txtempus)
 
@@ -105,7 +111,9 @@ Legend: `H` = High Power (~50% duty), `L` = Low Power (~6% duty).
 
 ### 2. DCF77 (Germany) - 77.5 kHz
 *   **Encoding**: Start-Low.
-*   **Frame**: 59 Seconds (Second 59 is "missing" carrier to mark minute start).
+*   **Frame**: One minute with 59 data bits. Second 59 has no amplitude reduction; the carrier remains high.
+*   **Time**: Encodes the following minute: add 60 seconds to the UTC frame-start timestamp, then convert to local time. This handles midnight, month/year rollover and DST. Sunday is encoded as 7.
+*   **A1**: Bit 16 announces a DST transition during the hour preceding it. Bits 17/18 describe the time encoded for the next minute.
 
 | Symbol | Duration (Low) | Pattern |
 | :--- | :--- | :--- |
@@ -119,6 +127,7 @@ Legend: `H` = High Power (~50% duty), `L` = Low Power (~6% duty).
 
 | Second | Field | Description |
 | :--- | :--- | :--- |
+| 16 | A1 | DST change announcement |
 | 17 | Z1 | DST Active (Summer) |
 | 18 | Z2 | DST Inactive (Winter) |
 | 21-27 | Minutes | BCD (LSB at 21) |
@@ -240,3 +249,13 @@ Legend: `H` = High Power (~50% duty), `L` = Low Power (~6% duty).
 | 51-52 | Month | BCD |
 | 53-56 | Year | BCD (Year since 2000) |
 | 46, 56 | Parity | Parity bits mixed in |
+
+## Wi-Fi provisioning
+
+`WiFiConfiguration` owns station reconnection, setup AP lifetime and provisioned credentials. Boot configuration is loaded in priority order: an explicit AP-only reset record, a valid NVS network record, optional compiled secrets, or immediate AP setup. NVS stores SSID/PSK together as one blob so power loss cannot leave a new SSID paired with an old password. The AP-only record uses the same key and size, with a distinct magic value and empty credentials. This keeps the reset decision and cleared credentials in one record, suppressing compiled secrets until a later successful configuration replaces that record.
+
+The setup AP is `clocksync` with password `clocksync`, at `192.168.4.1`. It starts immediately without credentials, or after 600,000 ms of uninterrupted station disconnection. Reconnect attempts continue every 60 seconds in AP+STA mode. The setup API is restricted to clients reaching the AP interface and requires a per-AP token on writes. It never returns the PSK. A candidate network is saved only after the requested SSID is connected for at least one second. The AP remains available on failure and closes 15 seconds after success. Time trust and transmission gating remain independent of AP mode.
+
+The station-side interface uses `GET /api/wifi/next` to show current and next-startup network names, the pending-restart state, and a per-boot write token. `POST /api/wifi/next` validates and stores credentials for the next boot without mutating the active `ssid_`/`psk_`, calling `WiFi.begin`, or changing reconnect behavior. `POST /api/wifi/reset` stores the AP-only record with empty credentials. Both writes require the token and a connection through the station interface. They are rejected while an immediate AP provisioning candidate is still being saved, so an in-flight provisioning attempt cannot silently overwrite a deferred change. No API returns the password.
+
+The normal UI loads Wi-Fi configuration only when its section opens, keeps edits intact during background status updates, and requires a separate confirmation before forgetting Wi-Fi. Neither operation reboots the device. Restarting applies the saved configuration; an unreachable new network uses the usual 10-minute fallback. The setup portal still connects immediately and saves only after a successful connection.
