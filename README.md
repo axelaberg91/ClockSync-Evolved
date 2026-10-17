@@ -1,8 +1,8 @@
-# clocksync evolved (v1.5.0)
+# ClockSync Evolved (v1.5.0)
 
 Sync a radio-controlled clock from Wi-Fi time using an M5Stack Atom Lite and a compact wire coil. Control it from your browser or the Atom's button. **DCF77 and Central European time are the defaults.**
 
-This fork is maintained by [axelaberg91](https://github.com/axelaberg91/clocksync), based on [tanvach/clocksync](https://github.com/tanvach/clocksync) and [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy). It adds the **clocksync evolved** web interface and the printable coil build below.
+This fork is maintained by [axelaberg91](https://github.com/axelaberg91/ClockSync-Evolved), based on [tanvach/clocksync](https://github.com/tanvach/clocksync) and [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy). It adds the **clocksync evolved** web interface and the printable coil build below.
 
 ## Get started
 
@@ -13,17 +13,15 @@ This fork is maintained by [axelaberg91](https://github.com/axelaberg91/clocksyn
 
 ## Build the Atom Lite unit
 
-**Printed, fitted and tested by Axel:** M5Stack Atom Lite, **20 turns of 0.5 mm enamelled copper wire**, and a **330 ohm series resistor**.
+**M5Stack Atom Lite · 20 turns of 0.5 mm enamelled copper wire · 330 ohm series resistor.**
 
-![Coil former with integrated Atom holder](hardware/images/coil-preview.png)
+![Atom placement and series wiring diagram](hardware/images/coil-preview.png)
 
 ### Download and print
 
 **[Download the print pack](hardware/print/clocksync-atom-lite-print-pack.zip?raw=true)**, extract it and open `print/print-both.3mf` in your slicer. The pack contains both parts, editable CAD and these build instructions.
 
 Individual files: [coil STL](hardware/coil/coil-75mm-integrated-holder.stl) · [connector clip STL](hardware/connector/dupont-housing-clip.stl) · [both parts as 3MF](hardware/print/print-both.3mf).
-
-For **Prusa CORE One / PLA**, start with a **0.4 mm nozzle, 0.12 mm layers, 4 perimeters, 20% gyroid, no supports**, at **100% scale**. Use your own printer/material profile. The 3MF contains geometry and placement, not G-code.
 
 The coil former is **75 x 75 x 15 mm**. It includes the Atom snap holder and a side clip for the resistor. Print it as one part; no separate holder or glue is needed. The small connector clip is the second part.
 
@@ -39,24 +37,28 @@ The coil former is **75 x 75 x 15 mm**. It includes the Atom snap holder and a s
 
 ### Assemble and connect
 
-1. Let the print cool, then snap the Atom into the holder with USB-C and Grove facing the large open area inside the coil. The button remains accessible.
-2. Leave about 20 cm at each end and wind **20 turns** around the outside of the core. A convenient arrangement is **15 turns in the first layer, then 5 in the second**. Keep the same rotational direction around the coil. Route both leads through the single exit to the inside.
-3. With USB disconnected, remove enamel from the wire ends, solder the series circuit below and insulate the joints. Let the sleeved resistor cool before snapping it into the side clip. The clip accepts a sleeved diameter of about 3.0-3.4 mm.
+1. Snap the Atom into the holder with USB-C and Grove facing inward.
+2. Wind **20 turns** of 0.5 mm enamelled wire around the coil former and bring both ends inside through the shared opening.
+3. Remove enamel from the ends, solder the circuit below and insulate the joints. Snap the resistor into the inside clip.
+4. Fully insert the Dupont females on **G32 and GND**, then fit the guide over their rear ends. Leave **5V and G26** unused.
 
 ```text
-Grove G32 (GPIO32) ---- coil ---- 330 ohm resistor ---- Grove GND
+G32 (GPIO32) ---- coil (20 turns) ---- 330 ohm ---- GND
 ```
 
-Use **G32 and GND, the two outer Grove positions below USB-C**. Leave the middle pins, **5V and G26**, unused. Identify pins from the [Atom Lite pin map](https://docs.m5stack.com/en/core/Atom-Lite), not left/right in a picture.
-
-4. Fully seat the two complete Dupont females first, then snap the printed guide over their **rear ends**. Hook each housing under its inner lip, then press its outer edge into the clip. The front ends stay free so both contacts can bottom out. Check that the guide does not push either female back; grip the housings when unplugging.
-5. Check continuity through the coil and resistor, connect USB power, select **DCF77 (77.5 kHz)** and **GPIO32**, then start the receiving clock's synchronization procedure close to the coil. Adjust its position and orientation as needed.
-
-Axel's complete Dupont housings fit the Grove port; other housings can vary. Keep the 330 ohm resistor in series. Cable plugs and bends need space beyond the printed 15 mm height.
+Connect USB power, select **DCF77 / GPIO32**, and start the clock's synchronization procedure close to the coil.
 
 ## Firmware setup
 
-Use **M5Stack board package 3.3.10**, board **M5Atom**, and **Huge APP (3MB No OTA/1MB SPIFFS)** for the Atom Lite's 4 MB flash. **No external M5Atom or FastLED libraries are required.** Wi-Fi can be configured through the setup portal; `secrets.h` is optional and ignored by Git.
+In Arduino IDE, install **M5Stack by M5Stack official, version 3.3.10**, then select:
+
+| Setting | Value |
+| --- | --- |
+| Tools → Board | M5Stack → **M5Atom** |
+| Flash capacity | **4 MB** (Atom Lite) |
+| Tools → Partition Scheme | **Huge APP (3MB No OTA/1MB SPIFFS)** |
+
+No extra libraries are needed. Upload the sketch, then configure Wi-Fi through the setup portal. To compile Wi-Fi credentials instead, copy `secrets_example.h` to `secrets.h`; that file is excluded from Git.
 
 DCF77 uses **`CET-1CEST,M3.5.0/2,M10.5.0/3`** by default. Transmission starts at the next whole minute after a confirmed NTP reply. A new reply is required after every boot, and transmission stops after 23 hours without one.
 
@@ -246,8 +248,8 @@ The standard DevKit hardware configuration has not been verified by this project
 
 ### Source history
 
-- [upstream-baseline](https://github.com/axelaberg91/clocksync/tree/upstream-baseline) preserves the original fork snapshot from `tanvach/clocksync`, commit `63d92cae27f5085cbd8474151474e6ea8660a867` (v1.3.1), before the changes credited to axelaberg91.
-- [v1.5.0](https://github.com/axelaberg91/clocksync/tree/v1.5.0) marks the current clocksync evolved version. The default `master` branch contains the current fork code, with the original Git history retained.
+- [upstream-baseline](https://github.com/axelaberg91/ClockSync-Evolved/tree/upstream-baseline) preserves the original fork snapshot from `tanvach/clocksync`, commit `63d92cae27f5085cbd8474151474e6ea8660a867` (v1.3.1), before the changes credited to axelaberg91.
+- [v1.5.0](https://github.com/axelaberg91/ClockSync-Evolved/tree/v1.5.0) marks the current clocksync evolved version. The default `master` branch contains the current fork code, with the original Git history retained.
 - Local Wi-Fi credentials (`secrets.h` or `secret.h`) and compiled firmware files are excluded from version control. Use `secrets_example.h` as a template or configure Wi-Fi through the setup portal.
 
 ### What's New in v1.5.0
@@ -289,7 +291,6 @@ The standard DevKit hardware configuration has not been verified by this project
 - [Coil OpenSCAD](hardware/coil/coil-75mm-integrated-holder.scad) · [connector clip OpenSCAD](hardware/connector/dupont-housing-clip.scad).
 - [Coil geometry report](hardware/coil/geometry-checks.json) · [connector geometry report](hardware/connector/geometry-checks.json).
 - The coil and clip are each one closed connected mesh. STL geometry matches the delivered designs. The combined plate was sliced in PrusaSlicer 2.9.6 without support or stability warnings.
-- Axel confirmed physical printing, fit and operation of the hardware build with 20 turns and 330 ohm. Firmware-specific verification and limits are recorded separately below.
 - CAD has some fixed coordinates: recheck fit and slicing after editing dimensions.
 
 </details>
@@ -315,7 +316,7 @@ For protocol and signal-timing details, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
 - **Original Author**: SASAKI Taroh (tarohs) - [nisejjy](https://github.com/tarohs/nisejjy)
 - **Upstream clocksync**: Tanvach - [tanvach/clocksync](https://github.com/tanvach/clocksync)
-- **Fork improvements (v1.4.0-v1.5.0)**: [axelaberg91](https://github.com/axelaberg91/clocksync) - DCF77 encoding and timing fixes; confirmed-NTP and 23-hour transmission safeguards; Atom Lite button and RGB status handling; Wi-Fi setup, fallback and next-startup configuration; and the English **clocksync evolved** web interface.
+- **Fork improvements (v1.4.0-v1.5.0)**: [axelaberg91](https://github.com/axelaberg91/ClockSync-Evolved) - DCF77 encoding and timing fixes; confirmed-NTP and 23-hour transmission safeguards; Atom Lite button and RGB status handling; Wi-Fi setup, fallback and next-startup configuration; and the English **clocksync evolved** web interface.
 - **Reference**: [txtempus](https://github.com/hzeller/txtempus) by Henner Zeller (used for WWVB frame verification).
 - **Printable hardware**: developed for Axel's build with Codex assistance, starting from Axel's original coil-former concept.
 
