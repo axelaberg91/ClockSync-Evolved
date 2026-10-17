@@ -1,5 +1,7 @@
 // clocksync - local radio clock station.
 // Based on nisejjy by SASAKI Taroh and clocksync by Tanvach.
+// Original fork contributions by axelaberg91: CC BY-NC 4.0; see LICENSE.md.
+// Inherited code is not relicensed; its license status remains unresolved.
 // Fork improvements (v1.4.0-v1.5.0) by axelaberg91: DCF77 reliability,
 // time-sync safeguards, Atom Lite controls, Wi-Fi configuration and web UI.
 // Radio code, networking and display use separate execution paths.

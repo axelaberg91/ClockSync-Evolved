@@ -1,5 +1,7 @@
 # Atom Lite print pack
 
+**License:** original designs and assets by **axelaberg91** are **CC BY-NC 4.0**. Non-commercial sharing and adaptation are allowed with attribution; commercial use requires separate permission. The rights holder may sell their own designs and prints. See [LICENSE.md](LICENSE.md) and the [full license](CC-BY-NC-4.0.txt).
+
 ## Build the Atom Lite unit
 
 **M5Stack Atom Lite · 20 turns of 0.5 mm enamelled copper wire · 330 ohm series resistor.**
