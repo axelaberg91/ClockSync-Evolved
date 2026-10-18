@@ -4,6 +4,8 @@ Sync a radio-controlled clock from Wi-Fi time using an M5Stack Atom Lite and a c
 
 This fork is maintained by [axelaberg91](https://github.com/axelaberg91/ClockSync-Evolved), based on [tanvach/clocksync](https://github.com/tanvach/clocksync) and [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy). It adds the **clocksync evolved** web interface and the printable coil build below.
 
+Original code, documentation and assets added by **axelaberg91** use **CC BY-NC 4.0**. Commercial use of those contributions requires separate permission; axelaberg91 retains the right to sell their own work. **The inherited firmware's license remains unresolved.** See [licensing and scope](LICENSE.md) and the [hardware asset terms](hardware/LICENSE.md).
+
 ## Get started
 
 1. **Build:** [download the print pack](hardware/print/clocksync-atom-lite-print-pack.zip?raw=true) and follow the short guide below.
@@ -325,6 +327,6 @@ For protocol and signal-timing details, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
 Hardware references: [M5Stack Atom Lite enclosure](https://github.com/m5stack/M5_Hardware/tree/master/Products/C008_Atom-Lite/Structures), [Pololu connector housing](https://www.pololu.com/product/1900) and [Grove connector drawing](https://statics3.seeedstudio.com/images/opl/datasheet/3470130P1.pdf). Reference meshes are not included.
 
-The inherited repository has no LICENSE file. Existing attribution is preserved; this addition does not relicense upstream code. A separate license for the new CAD has not been selected.
+Original fork contributions and printable hardware by axelaberg91 are licensed under **CC BY-NC 4.0**, with attribution and non-commercial use required. The rights holder may still sell their own work or grant separate commercial permission. The inherited firmware's license remains unresolved; upstream code and third-party references are not relicensed. See [LICENSE.md](LICENSE.md) and [hardware/LICENSE.md](hardware/LICENSE.md).
 
 </details>

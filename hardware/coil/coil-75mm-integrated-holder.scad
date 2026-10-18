@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
+// Original design by axelaberg91; see ../LICENSE.md.
 // ATOM Lite / clocksync coil former v6 integrated. Units: mm.
 outer_d=75;
 core_d=69;

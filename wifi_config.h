@@ -1,5 +1,6 @@
 #pragma once
 
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // Wi-Fi setup, fallback and deferred configuration by axelaberg91.
 
 #include <WiFi.h>
