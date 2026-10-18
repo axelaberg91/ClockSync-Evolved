@@ -1,4 +1,5 @@
 #pragma once
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // Web interface and status display for the clocksync fork by axelaberg91.
 #include <pgmspace.h>
 

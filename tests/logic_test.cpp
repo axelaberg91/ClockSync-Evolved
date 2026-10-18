@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // DCF77, time-policy, button and status checks for this fork by axelaberg91.
 #include <stdint.h>
 #include <time.h>

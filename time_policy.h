@@ -1,5 +1,6 @@
 #pragma once
 
+// SPDX-License-Identifier: CC-BY-NC-4.0
 // DCF77 time policy, button handling and status logic by axelaberg91.
 
 #include <stdint.h>
