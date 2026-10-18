@@ -68,8 +68,10 @@ DCF77 uses **`CET-1CEST,M3.5.0/2,M10.5.0/3`** by default. Transmission starts at
 
 The web interface's **Wi-Fi settings** can save a new network for the next startup or forget the saved network. Saving or forgetting does not disconnect the current connection; restart to apply it.
 
+For another clock protocol, see [Changing the time signal and time zone](#changing-the-time-signal-and-time-zone).
+
 <details>
-<summary>Installation, Wi-Fi setup and other time zones</summary>
+<summary>Installation and Wi-Fi setup</summary>
 
 1. **Wi-Fi setup**:
     * With no saved network and no `secrets.h`, the device immediately starts the AP **clocksync**, password **clocksync**. Connect to it and open `http://192.168.4.1` (a captive portal may also open automatically).
@@ -80,34 +82,7 @@ The web interface's **Wi-Fi settings** can save a new network for the next start
     * After **10 minutes of continuous Wi-Fi disconnection**, setup AP mode starts automatically while station reconnect attempts continue every 60 seconds. This also recovers from a changed SSID/password. A short disconnection that recovers resets the 10-minute timer.
     * Boot priority: **explicit Wi-Fi reset**, saved configuration, optional compiled `secrets.h`, then setup AP. To compile credentials, copy `secrets_example.h` to `secrets.h` and fill in the two defines. The secrets file is ignored by Git and is optional. Forgetting Wi-Fi does not remove credentials embedded in the firmware; it prevents their use at startup.
     * Wi-Fi passwords are never returned by the APIs. Network names are shown so you can distinguish the current and next-startup settings. The transmit guard is independent: setup AP mode does not validate time or reset the 23-hour limit.
-2.  **Timezone (Critical)**:
-    *   Open `clocksync.ino`.
-    *   Find the line `#define TZ "..."`.
-    *   Change the string to match your station. ESP32 requires a POSIX TZ string (not Olson names like `America/Los_Angeles`).
-    *   **WWVB (USA)**: Set TZ to your US timezone. WWVB frame time is always UTC (via `gmtime()`), so there is no double-offset risk — TZ only affects the DST status bits.
-
-        | Region | POSIX TZ string |
-        | :--- | :--- |
-        | Pacific (LA, SF, Seattle) | `PST8PDT,M3.2.0,M11.1.0` |
-        | Mountain (Denver, Phoenix†) | `MST7MDT,M3.2.0,M11.1.0` |
-        | Central (Chicago, Dallas) | `CST6CDT,M3.2.0,M11.1.0` |
-        | Eastern (NYC, Miami) | `EST5EDT,M3.2.0,M11.1.0` |
-        | Hawaii | `HST10` |
-
-        †Arizona (no DST): use `MST7` instead.
-
-    *   **Other stations**: These transmit local time directly, so TZ must match the station's native timezone:
-
-        | Station | Region | POSIX TZ string |
-        | :--- | :--- | :--- |
-        | JJY | Japan | `JST-9` |
-        | DCF77 | Germany / Central Europe | `CET-1CEST,M3.5.0/2,M10.5.0/3` |
-        | MSF | United Kingdom | `GMT0BST,M3.5.0/1,M10.5.0` |
-        | BSF | Taiwan | `CST-8` |
-        | BPC | China | `CST-8` |
-
-    *   **Lookup**: Find any POSIX TZ string by city name in [this table](https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv). On Mac/Linux: `tail -1 /etc/localtime`
-3. **Dependencies & Upload**:
+2. **Dependencies & Upload**:
     * Target: **M5Stack by M5Stack official 3.3.10**, board **M5Atom** (the classic Atom Lite, not AtomS3).
     * Add `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json` under Additional Board Manager URLs. Install version **3.3.10** and select **Tools → Board → M5Stack → M5Atom**.
     * Use **Huge APP (3MB No OTA/1MB SPIFFS)** with the Atom Lite's **4 MB** flash. No external Arduino libraries are required.
@@ -123,6 +98,62 @@ The web interface's **Wi-Fi settings** can save a new network for the next start
     * The older Espressif 2.0.17 build is a historical compatibility result. The current target and configuration instructions above use M5Stack 3.3.10.
 
 </details>
+
+## Changing the time signal and time zone
+
+**The signal is a saved radio setting; the time zone is compiled into the firmware.** Selecting a signal does not automatically change its time zone. DCF77 with Central European time is the default, including for clocks used in Sweden.
+
+### Select the time signal
+
+1. Open `http://clocksync.local` or the device IP and choose **Pause transmission** before changing the configuration.
+2. Open **Radio settings**, choose the protocol supported by your clock under **Time signal**, and select **Save radio settings**. This selects both the encoder and carrier frequency, without changing the antenna pin. The selection is saved across restarts and does not require a new upload.
+3. Check the required time zone below. If it differs from the compiled `TZ`, update and upload the firmware before resuming.
+4. Confirm the selected signal and local time on the status page. After an upload, wait for a confirmed NTP sync. Select **Resume transmission** when the configuration is ready; transmission aligns to the next whole minute. A receiver may need several complete frames to synchronize.
+
+| Time signal | Carrier | Serial command | Firmware `TZ` |
+| --- | --- | --- | --- |
+| DCF77 / Germany | 77.5 kHz | `sd` | `CET-1CEST,M3.5.0/2,M10.5.0/3` |
+| JJY / Fukushima | 40 kHz | `sj` | `JST-9` |
+| JJY / Fukuoka | 60 kHz | `sk` | `JST-9` |
+| WWVB / USA | 60 kHz | `sw` | A US time zone matching the receiver's DST rules; examples below |
+| MSF / United Kingdom | 60 kHz | `sm` | `GMT0BST,M3.5.0/1,M10.5.0/2` |
+| BSF / Taiwan | 77.5 kHz | `st` | `CST-8` |
+| BPC / China | 68.5 kHz | `sc` | `CST-8` |
+
+The same station commands work in Serial Monitor at **115200 baud**. They change the signal, not the time zone. Other station encoders are retained from upstream and have not received the same review as DCF77.
+
+### Change the firmware time zone
+
+1. Open `clocksync.ino` in Arduino IDE and find the existing `#define TZ` near the top.
+2. Replace its string with the rule for the selected signal. For either JJY signal, for example:
+
+   ```cpp
+   #define TZ "JST-9"
+   ```
+
+3. Save the sketch, then compile and upload using the [Atom Lite board settings](#firmware-setup). A restart alone cannot apply a source-code change. Keep **Erase All Flash Before Sketch Upload** disabled if you want to retain saved Wi-Fi and radio settings, and check the selected signal after uploading.
+
+Use a **POSIX TZ rule**, rather than a city identifier such as `Europe/Stockholm`; see [Espressif's time-zone documentation](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/system_time.html#timezones). POSIX offset signs are reversed from common UTC notation: `JST-9` means UTC+9. The rule controls the web page's local clock and the local-time encoders. For DCF77, retain the Central European rule to match [the station's CET/CEST time code](https://www.ptb.de/cms/fileadmin/internet/publikationen/broschueren/About_Time_2019en.pdf).
+
+**WWVB is different:** its frame time is UTC, and the receiver applies its own selected display time zone, as described by [NIST](https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwvb/help-wwvb-radio-controlled). This firmware uses `TZ` for its WWVB DST flags and local web display. Match the receiver's DST rules; changing `TZ` does not offset the UTC fields in the WWVB frame.
+
+<details>
+<summary>US time-zone examples for WWVB</summary>
+
+| Region | POSIX `TZ` rule |
+| --- | --- |
+| Pacific / Los Angeles | `PST8PDT,M3.2.0/2,M11.1.0/2` |
+| Mountain / Denver | `MST7MDT,M3.2.0/2,M11.1.0/2` |
+| Central / Chicago | `CST6CDT,M3.2.0/2,M11.1.0/2` |
+| Eastern / New York | `EST5EDT,M3.2.0/2,M11.1.0/2` |
+| Phoenix / most of Arizona, without DST | `MST7` |
+| Hawaii, without DST | `HST10` |
+
+</details>
+
+The web setting **Daylight saving flag** overrides the DCF77/MSF flag; it does not change `TZ` or adjust the encoded hour. Leave it on **Automatic** for normal operation. WWVB derives its flags from `TZ` independently of that override.
+
+To change the compiled default signal as well, replace the existing `SN_DEFAULT` definition in `clocksync.ino`, for example `#define SN_DEFAULT (SN_JJY_E)`. A previously saved station takes precedence over this default; select the intended signal in the web interface on an already configured device.
 
 <details>
 <summary>Button, status LED, saved settings and NTP timing</summary>
@@ -202,7 +233,7 @@ Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksy
     *   **Volume**: Increase "Volume" (Drive Strength) to `g3` using the Serial/Web command.
     *   **Antenna**: Ensure your antenna wire isn't broken and the resistor is secure.
 *   **Clock shows wrong time**:
-    *   **Timezone**: Check the `#define TZ` line in `clocksync.ino`. For WWVB, use a US POSIX timezone (see setup step 2).
+    *   **Timezone**: Check the `#define TZ` line in `clocksync.ino` and upload again after changing it. See [Changing the time signal and time zone](#changing-the-time-signal-and-time-zone), including the WWVB-specific notes.
     *   **DST off by 1 hour (WWVB)**: If TZ is set to `"UTC0"`, DST bits will always be 0 and your clock won't spring forward. Set TZ to your US timezone.
 * **Compilation Error**: Confirm that **M5Stack 3.3.10 / M5Atom** is selected and all project headers are in the sketch folder. External M5Atom/FastLED libraries are not used by this version.
 
