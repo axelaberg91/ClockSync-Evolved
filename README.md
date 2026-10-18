@@ -1,8 +1,10 @@
 # ClockSync Evolved (v1.5.0)
 
-Sync a radio-controlled clock from Wi-Fi time using an M5Stack Atom Lite and a compact wire coil. Control it from your browser or the Atom's button. **DCF77 and Central European time are the defaults.**
+**Designed specifically for the classic M5Stack Atom Lite (ESP32-PICO-D4).** ClockSync Evolved uses Wi-Fi time and a compact wire coil to sync nearby radio-controlled clocks. The default pins, RGB status LED, button controls and printable holder all target the Atom Lite. **DCF77 and Central European time are the defaults.**
 
 This fork is maintained by [axelaberg91](https://github.com/axelaberg91/ClockSync-Evolved), based on [tanvach/clocksync](https://github.com/tanvach/clocksync) and [SASAKI Taroh's nisejjy](https://github.com/tarohs/nisejjy). It adds the **clocksync evolved** web interface and the printable coil build below.
+
+For a standard dual-core ESP32 DevKit, see the [porting notes below](#other-esp32-boards) for the board settings, pins and physical mounting that may need to change.
 
 Original code, documentation and assets added by **axelaberg91** use **CC BY-NC 4.0**. Commercial use of those contributions requires separate permission; axelaberg91 retains the right to sell their own work. **The inherited firmware's license remains unresolved.** See [licensing and scope](LICENSE.md) and the [hardware asset terms](hardware/LICENSE.md).
 
@@ -206,12 +208,12 @@ Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksy
 
 </details>
 
-<details>
-<summary>Other ESP32 boards</summary>
+## Other ESP32 boards
 
-**Supported Boards**:
-- **M5Stack Atom Lite** (Recommended): Works out of the box. The RGB LED indicates status, and the button toggles transmission.
-- **Other ESP32 boards**: Require board-specific antenna, LED and button pin settings. This version has been compiled for Atom Lite; ESP32-S3 compatibility has not been verified.
+<details>
+<summary>Porting to a standard ESP32 DevKit</summary>
+
+The **classic M5Stack Atom Lite** is the development and build target. Other boards require adaptation to their actual hardware. A standard DevKit configuration has not been verified by this project.
 
 ### Atom Lite versus a standard ESP32 DevKit
 
@@ -227,6 +229,31 @@ Here, "standard ESP32" means a classic, dual-core ESP32 DevKit/WROOM board. ESP3
 | Button | Active-low button on GPIO39 (`PIN_BUTTON`), external pull-up on Atom Lite, 10 ms software debounce | Set `PIN_BUTTON` to the connected button pin or `-1` to disable it. GPIO34–39 require an external pull-up. BOOT is not automatically the application control button |
 | Flash | 4 MB; use a partition scheme for 4 MB flash | Match the actual flash size, flash mode and partition layout; PSRAM is not required |
 | Hardware initialization | Core GPIO/RGB functions; no M5Atom library | Adjust the LED/button pin definitions. Changing the board menu does not add missing physical hardware |
+
+### What to change
+
+1. **Board profile and flash layout:** select the actual board in Arduino IDE, using the appropriate ESP32 board package. Match its flash size and partition layout. The M5Atom profile and the printed Atom holder are specific to the Atom Lite.
+2. **Antenna pin and wiring:** review `PIN_RADIO` in `clocksync.ino`. GPIO32 is the default; keep it only if the board exposes it and it is free. Connect the coil and series resistor to the labeled GPIO and GND. The Atom's Grove wire colours and connector positions do not describe a DevKit's headers.
+3. **Status LED:** set `PIN_RGB_LED` to the pin of a compatible addressable RGB LED, or `-1` if none is fitted. For a simple LED, set `PIN_LED` instead and disable `PIN_RGB_LED`. The current `indicator()` output is active high; an active-low LED requires that output logic to be inverted. A simple LED cannot display the RGB status colours.
+4. **Button:** set `PIN_BUTTON` to the connected active-low button pin, or `-1` to use only the web controls. GPIO34-39 need an external pull-up. Other button inputs use the internal pull-up in the current code. The Atom's GPIO39 button and the DevKit's BOOT button are separate hardware arrangements.
+5. **Physical mounting:** the integrated holder fits the Atom Lite enclosure. A DevKit needs a suitable mount or a revised holder with clearances for its board, USB connector and pin headers.
+
+For example, a classic dual-core DevKit with GPIO32 available and no connected status LED or button can start with these definitions in `clocksync.ino`:
+
+```cpp
+#define PIN_RADIO 32
+#define PIN_LED -1
+#define PIN_RGB_LED -1
+#define PIN_BUTTON -1
+```
+
+This example disables the physical status indicators and button; the web controls remain available. It is a porting starting point, not a verified DevKit build.
+
+The current radio-pin allowlist in `safePin()` and the web selector are **19, 21, 22, 23, 25, 26, 32 and 33**. If a port needs a different radio pin, update both `safePin()` in `clocksync.ino` and the antenna-pin selector in `web_ui.h` after checking that pin against the board's hardware. Optional frequency measurement uses `PIN_MEAS` (GPIO33 by default); review it if using the measurement jumper.
+
+If the board already has saved radio settings, check the antenna pin in the web interface: the saved pin takes precedence over the compiled default.
+
+The radio task is pinned to **core 1**. These notes apply to a classic **dual-core** ESP32; single-core devices need a separate review of task placement, GPIOs and peripherals. ESP32-S3 and other families also need their own board-specific review. Confirm the carrier frequency and modulation timing on the adapted hardware.
 
 The **M5Stack board package** supplies the framework, compiler and board profile. This fork no longer needs the separate M5Atom or FastLED libraries for the Atom Lite's one status pixel and button. The web interface does not display a board-specific label.
 
