@@ -23,7 +23,7 @@ commercial permissions. This public license does not transfer ownership.
 ## Scope of the grant
 
 The grant covers only rights held by axelaberg91 in original contributions. It
-includes the original `time_policy.h`, `web_ui.h`, `wifi_config.h` and
+includes the original `time_policy.h`, `time_zones.h`, `web_ui.h`, `wifi_config.h` and
 `tests/logic_test.cpp` files, original changes to the firmware, and the printable
 hardware described in [hardware/LICENSE.md](hardware/LICENSE.md).
 

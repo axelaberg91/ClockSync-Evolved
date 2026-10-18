@@ -2,10 +2,10 @@
 // Based on nisejjy by SASAKI Taroh and clocksync by Tanvach.
 // Original fork contributions by axelaberg91: CC BY-NC 4.0; see LICENSE.md.
 // Inherited code is not relicensed; its license status remains unresolved.
-// Fork improvements (v1.4.0-v1.5.0) by axelaberg91: DCF77 reliability,
-// time-sync safeguards, Atom Lite controls, Wi-Fi configuration and web UI.
+// Fork improvements (v1.4.0-v1.6.0) by axelaberg91: DCF77 reliability,
+// time-sync safeguards, Atom Lite controls, Wi-Fi configuration and web time zones.
 // Radio code, networking and display use separate execution paths.
-#define VERSION "1.5.0"
+#define VERSION "1.6.0"
 #define PIN_RADIO 32
 #define PIN_MEAS 33
 #define PIN_LED -1
@@ -13,7 +13,6 @@
 #define PIN_BUTTON 39
 #define PIN_BUZZ -1
 #define DEVICENAME "clocksync"
-#define TZ "CET-1CEST,M3.5.0/2,M10.5.0/3"
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -25,6 +24,7 @@
 #include <esp_timer.h>
 #include <esp_sntp.h>
 #include "time_policy.h"
+#include "time_zones.h"
 #include "web_ui.h"
 #include "wifi_config.h"
 
@@ -212,6 +212,10 @@ struct Control {
   int pin = PIN_RADIO;
   int drive = GPIO_DRIVE_CAP_2;
   int dst = 2;
+  int timeZone = clocksync::DEFAULT_TIME_ZONE;
+  uint32_t timeZoneRevision = 0;
+  bool changingTimeZone = true;
+  bool timeZoneError = false;
   bool testCarrier = false;
   bool editingTime = false;
   bool wifiConnected = false;
@@ -220,6 +224,8 @@ struct Control {
 struct RadioStatus {
   bool active = false;
   bool aligning = false;
+  bool timeZonePaused = false;
+  uint32_t timeZoneRevision = 0;
   uint32_t frequency = 0;
   int error = 0;
   clocksync::StatusLight light = clocksync::StatusLight::Off;
@@ -245,6 +251,10 @@ static uint32_t lastNtpKick = 0, lastMdnsAttempt = 0;
 static uint32_t timeEditGeneration = 0;
 static const uint32_t RETRY_MS = 60000;
 static String lastCmdResp;
+// Only the Arduino loop changes libc's zone, after the radio task acknowledges a pause.
+static int activeTimeZone = clocksync::DEFAULT_TIME_ZONE;
+static bool timeZoneApplied = false;
+static bool timeZoneApplyFailed = false;
 static volatile uint32_t measCount = 0;
 static const ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
 static const ledc_timer_t LEDC_TIMERIDX = LEDC_TIMER_0;
@@ -267,6 +277,43 @@ void snapshot(Control &c, clocksync::TimeTrust &t, RadioStatus &r) {
 void publishRadio(const RadioStatus &r) {
   portENTER_CRITICAL(&stateMux);
   radioStatus = r;
+  portEXIT_CRITICAL(&stateMux);
+}
+
+void updateControl(Control next) {
+  const bool pending = !timeZoneApplied || next.timeZone != activeTimeZone;
+  portENTER_CRITICAL(&stateMux);
+  next.timeZoneRevision = control.timeZoneRevision + (pending ? 1U : 0U);
+  next.changingTimeZone = pending;
+  next.timeZoneError = false;
+  control = next;
+  portEXIT_CRITICAL(&stateMux);
+  timeZoneApplyFailed = false;
+}
+
+bool applyTimeZone(int index) {
+  if (index < 0 || (size_t)index >= clocksync::TIME_ZONE_COUNT) return false;
+  if (setenv("TZ", clocksync::TIME_ZONES[index].rule, 1) != 0) return false;
+  tzset();
+  activeTimeZone = index;
+  timeZoneApplied = true;
+  return true;
+}
+
+void serviceTimeZone() {
+  if (timeZoneApplyFailed) return;
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  if (!c.changingTimeZone || !r.timeZonePaused || r.timeZoneRevision != c.timeZoneRevision) return;
+  // A matching acknowledgement guarantees that no encoder is reading the old zone.
+  if (!applyTimeZone(c.timeZone)) {
+    timeZoneApplyFailed = true;
+    portENTER_CRITICAL(&stateMux);
+    control.timeZoneError = true;
+    portEXIT_CRITICAL(&stateMux);
+    return;  // Fail closed; saving settings again retries, without changing time trust.
+  }
+  portENTER_CRITICAL(&stateMux);
+  control.changingTimeZone = false;
   portEXIT_CRITICAL(&stateMux);
 }
 
@@ -687,14 +734,15 @@ void radioTask(void *) {
     const int64_t wallUs = (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
     const time_t minute = tv.tv_sec - tv.tv_sec % 60;
     const bool fresh = trust.fresh(monotonic);
-    const bool eligible = c.requested && fresh && !c.editingTime;
+    const bool eligible = c.requested && fresh && !c.editingTime && !c.changingTimeZone;
     const int64_t offset = wallUs - monotonic;
     const bool clockStep = offsetKnown && llabs(offset - previousOffset) > 50000;
     previousOffset = offset;
     offsetKnown = fresh;
 
     const bool changed = !controlKnown || c.pin != previousControl.pin || c.station != previousControl.station ||
-                         c.drive != previousControl.drive || c.dst != previousControl.dst;
+                         c.drive != previousControl.drive || c.dst != previousControl.dst ||
+                         c.timeZoneRevision != previousControl.timeZoneRevision;
     previousControl = c;
     controlKnown = true;
     if (changed || (eligible && !eligibleBefore) || (fresh && clockStep)) {
@@ -767,8 +815,11 @@ void radioTask(void *) {
         }
       }
     }
+    // Publish the acknowledgement only after stopping the carrier and skipping frame work.
+    state.timeZonePaused = c.changingTimeZone;
+    state.timeZoneRevision = c.timeZoneRevision;
     state.light = clocksync::statusLight(c.led && (PIN_LED >= 0 || PIN_RGB_LED >= 0), c.requested, c.wifiConnected, trust.synced,
-        fresh, state.active, state.error != 0, monotonic - trust.lastSyncUs);
+        fresh, state.active, state.error != 0 || c.timeZoneError, monotonic - trust.lastSyncUs);
     indicator(state.light);
     publishRadio(state);
     // Wall-clock sampling avoids accumulated tick drift and catches NTP corrections.
@@ -790,6 +841,7 @@ void saveSettings() {
   prefs.putInt("pin", c.pin); prefs.putInt("drive", c.drive);
   prefs.putInt("dst", c.dst); prefs.putInt("led", c.led);
   prefs.putInt("ntp", ntpsync);
+  prefs.putString("tzid", clocksync::TIME_ZONES[c.timeZone].id);
   prefs.end();
 }
 
@@ -803,6 +855,9 @@ void loadSettings() {
   control.led = prefs.getInt("led", 1) != 0;
   control.drive = constrain(prefs.getInt("drive", GPIO_DRIVE_CAP_2), 0, 3);
   control.dst = constrain(prefs.getInt("dst", 2), 0, 2);
+  const String timeZoneId = prefs.getString("tzid", clocksync::TIME_ZONES[clocksync::DEFAULT_TIME_ZONE].id);
+  const int zone = clocksync::findTimeZone(timeZoneId.c_str());
+  control.timeZone = zone >= 0 ? zone : clocksync::DEFAULT_TIME_ZONE;
   ntpsync = prefs.getInt("ntp", 1) != 0;
   prefs.end();
   // Time trust deliberately never persists across a reboot.
@@ -832,7 +887,13 @@ void serviceNetwork() {
     if (!ntpKicked || ms - lastNtpKick >= RETRY_MS) {
       // Registers SNTP without waiting for a response. Periodic refresh stays enabled.
       esp_sntp_set_sync_interval(clocksync::NTP_INTERVAL_MS);
-      configTzTime(TZ, "pool.ntp.org", "time.nist.gov");
+      // Configure SNTP without rewriting TZ while the radio task is encoding a frame.
+      if (esp_sntp_enabled()) esp_sntp_stop();
+      esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+      esp_sntp_setservername(0, "pool.ntp.org");
+      esp_sntp_setservername(1, "time.nist.gov");
+      esp_sntp_setservername(2, nullptr);
+      esp_sntp_init();
       ntpConfigured = ntpKicked = true;
       syncRequested = false;
       lastNtpKick = ms;
@@ -843,7 +904,8 @@ void serviceNetwork() {
 
 const char *stateName(const Control &c, const clocksync::TimeTrust &t, const RadioStatus &r, int64_t us) {
   if (!c.requested) return "paused";
-  if (r.error) return "error";
+  if (r.error || timeZoneApplyFailed) return "error";
+  if (c.changingTimeZone) return "configuring";
   if (!t.synced) return "waiting";
   if (!t.fresh(us)) return "stale";
   if (r.active) return "transmitting";
@@ -859,15 +921,15 @@ String generateStatusJSON() {
   char local[40], last[40];
   strftime(local, sizeof(local), "%Y-%m-%d %H:%M:%S", &display);
   last[0] = '\0';
-  if (t.synced) {
+  if (t.synced && timeZoneApplied) {
     struct tm lt; localtime_r(&t.lastSyncEpoch, &lt);
     strftime(last, sizeof(last), "%Y-%m-%d %H:%M:%S", &lt);
   }
-  String s; s.reserve(800);
+  String s; s.reserve(1150);
   s += "{\"version\":\"" VERSION "\",\"state\":\"";
   s += stateName(c,t,r,us);
   s += "\",\"requested\":"; s += c.requested ? "true" : "false";
-  s += ",\"active\":"; s += r.active && c.requested && t.fresh(us) ? "true" : "false";
+  s += ",\"active\":"; s += r.active && c.requested && t.fresh(us) && !c.changingTimeZone ? "true" : "false";
   s += ",\"wifi\":"; s += WiFi.status() == WL_CONNECTED ? "true" : "false";
   s += ",\"ntp\":"; s += ntpsync ? "true" : "false";
   s += ",\"syncPending\":"; s += syncRequested ? "true" : "false";
@@ -878,11 +940,17 @@ String generateStatusJSON() {
   s += ",\"pin\":"; s += c.pin;
   s += ",\"drive\":"; s += c.drive;
   s += ",\"dst\":"; s += c.dst;
+  s += ",\"timeZone\":\""; s += clocksync::TIME_ZONES[c.timeZone].id; s += '"';
+  s += ",\"activeTimeZone\":\""; s += timeZoneApplied ? clocksync::TIME_ZONES[activeTimeZone].id : ""; s += '"';
+  s += ",\"timeZoneName\":\""; s += timeZoneApplied ? clocksync::TIME_ZONES[activeTimeZone].name : "Unavailable"; s += '"';
+  s += ",\"timeZoneRule\":\""; s += timeZoneApplied ? clocksync::TIME_ZONES[activeTimeZone].rule : ""; s += '"';
+  s += ",\"timeZonePending\":"; s += c.changingTimeZone ? "true" : "false";
+  s += ",\"timeZoneError\":"; s += timeZoneApplyFailed ? "true" : "false";
   s += ",\"led\":"; s += c.led ? "true" : "false";
   const char *lightNames[] = {"off", "green", "yellow", "red", "stopped"};
   s += ",\"ledState\":\""; s += lightNames[(int)r.light]; s += '"';
   s += ",\"setupAP\":"; s += wifiConfiguration.portalActive() ? "true" : "false";
-  s += ",\"localTime\":\""; s += t.synced ? local : ""; s += '"';
+  s += ",\"localTime\":\""; s += t.synced && timeZoneApplied ? local : ""; s += '"';
   s += ",\"localMilliseconds\":"; s += (long)(tv.tv_usec / 1000);
   s += ",\"lastSync\":\""; s += last; s += '"';
   s += ",\"syncAgeSeconds\":"; s += t.synced ? (long)((us - t.lastSyncUs) / 1000000) : -1L;
@@ -904,7 +972,12 @@ String generateStatusText() {
   s += "\nGPIO: "; s += c.pin;
   s += "\nNTP sync confirmed: "; s += t.synced ? "yes" : "no";
   s += "\nHoldover remaining: "; s += t.remainingSeconds(us); s += " seconds";
-  s += "\nTimezone: " TZ "\n";
+  s += "\nTime zone: "; s += timeZoneApplied ? clocksync::TIME_ZONES[activeTimeZone].name : "Unavailable";
+  s += "\nTime zone rule: "; s += timeZoneApplied ? clocksync::TIME_ZONES[activeTimeZone].rule : "";
+  s += "\nSelected time zone: "; s += clocksync::TIME_ZONES[c.timeZone].id;
+  s += "\nTime zone pending: "; s += c.changingTimeZone ? "yes" : "no";
+  s += "\nTime zone error: "; s += timeZoneApplyFailed ? "yes" : "no";
+  s += '\n';
   return s;
 }
 
@@ -957,6 +1030,7 @@ int docmd(char *buf) {
   } else if (command == 'r' && n == 1) {
     c = Control(); requestSync(); save = true;
   } else if ((command == 'd' || command == 't') && n == 7) {
+    if (c.changingTimeZone) return 0;
     for (size_t i=1;i<n;++i) if (!isdigit((unsigned char)buf[i])) return 0;
     time_t epoch = time(nullptr); struct tm edited; localtime_r(&epoch,&edited);
     const int a = (buf[1]-'0')*10+buf[2]-'0', b=(buf[3]-'0')*10+buf[4]-'0', d=(buf[5]-'0')*10+buf[6]-'0';
@@ -988,7 +1062,7 @@ int docmd(char *buf) {
     return 1;
   } else return 0;
   if (save) {
-    portENTER_CRITICAL(&stateMux); control=c; portEXIT_CRITICAL(&stateMux);
+    updateControl(c);
     saveSettings();
   }
   return 1;
@@ -1004,14 +1078,19 @@ bool parseField(const char *name, int &value) {
 
 void handleSettings() {
   int station,pin,drive,led,dst;
+  Control c; clocksync::TimeTrust t; RadioStatus r; snapshot(c,t,r);
+  int zone = c.timeZone;  // Older API clients may omit the new field.
+  if (server.hasArg("timezone")) {
+    const String id = server.arg("timezone");
+    zone = id.length() <= 32 ? clocksync::findTimeZone(id.c_str()) : -1;
+  }
   if(!parseField("station",station)||!parseField("pin",pin)||!parseField("drive",drive)||
-     !parseField("led",led)||!parseField("dst",dst)||station>SN_BPC||!safePin(pin)||drive>3||led>1||dst>2) {
+     !parseField("led",led)||!parseField("dst",dst)||station>SN_BPC||!safePin(pin)||drive>3||led>1||dst>2||zone<0) {
     server.send(400,"text/plain","Invalid settings"); return;
   }
-  portENTER_CRITICAL(&stateMux);
-  control.station=station; control.pin=pin; control.drive=drive;
-  control.led=led!=0; control.dst=dst;
-  portEXIT_CRITICAL(&stateMux);
+  c.station=station; c.pin=pin; c.drive=drive;
+  c.led=led!=0; c.dst=dst; c.timeZone=zone;
+  updateControl(c);
   saveSettings();
   server.sendHeader("Cache-Control","no-store");
   server.send(200,"application/json; charset=utf-8",generateStatusJSON());
@@ -1019,6 +1098,18 @@ void handleSettings() {
 
 void setupWebServer() {
   wifiConfiguration.registerRoutes();
+  server.on("/api/timezones", HTTP_GET, [](){
+    String s; s.reserve(1500);
+    s = "[";
+    for (size_t i=0; i<clocksync::TIME_ZONE_COUNT; ++i) {
+      if (i) s += ',';
+      s += "{\"id\":\""; s += clocksync::TIME_ZONES[i].id;
+      s += "\",\"name\":\""; s += clocksync::TIME_ZONES[i].name; s += "\"}";
+    }
+    s += ']';
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200,"application/json; charset=utf-8",s);
+  });
   server.on("/api/settings", HTTP_POST, handleSettings);
   server.on("/", HTTP_GET, [](){
     server.sendHeader("Cache-Control", "no-store");
@@ -1051,8 +1142,10 @@ void setup() {
   pinMode(PIN_BUTTON, PIN_BUTTON >= 34 ? INPUT : INPUT_PULLUP);
 #endif
   indicator(clocksync::StatusLight::Off);
-  setenv("TZ",TZ,1); tzset();
   loadSettings();
+  timeZoneApplyFailed = !applyTimeZone(control.timeZone);
+  control.changingTimeZone = timeZoneApplyFailed;
+  control.timeZoneError = timeZoneApplyFailed;
   pinMode(control.pin,INPUT);
   esp_sntp_set_time_sync_notification_cb(onTimeSync);
 #if HAS_WIFI_SECRETS
@@ -1068,6 +1161,7 @@ void setup() {
 }
 
 void loop() {
+  serviceTimeZone();
   serviceNetwork();
   bool pressed = false;
 #if PIN_BUTTON >= 0
