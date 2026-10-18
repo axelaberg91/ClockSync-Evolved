@@ -31,6 +31,17 @@ Normal configuration uses the web interface. To change the compiled default sign
 
 ## Verification record and limits
 
+### Automated checks
+
+[CI](../.github/workflows/ci.yml) runs for every pull request targeting `master`, for pushes to `master`, and on manual dispatch. The stable check names are **Logic tests** and **Atom Lite build**.
+
+- **Logic tests** compiles and runs the existing `tests/logic_test.cpp` fixtures on Ubuntu.
+- **Atom Lite build** uses Arduino CLI **1.5.1**, M5Stack **3.3.10**, and `m5stack:esp32:m5stack_atom:PartitionScheme=huge_app`. It compiles both the Wi-Fi portal configuration and a configuration using only `secrets_example.h` placeholders.
+- The workflow rejects tracked `secrets.h`/`secret.h`, grants its token read-only repository access, verifies the CLI archive checksum, and pins third-party actions to full commit SHAs. The board-tool cache is tied to the CLI and core versions.
+- These checks verify compilation and the existing host fixtures. They do not measure carrier timing or test physical receivers, Wi-Fi provisioning, persistence or runtime time-zone transitions on an Atom Lite.
+
+### Earlier development results
+
 The earlier v1.4.0 credential variants were compiled successfully with **M5Stack 3.3.10 / M5Atom / Huge APP** on 2026-10-17: with `secrets.h` and from a separate source copy without it. Compiler dependencies confirm that the latter does not include `secrets.h`. Those builds used approximately **1.08 MB program storage and 53,520 bytes of static RAM**. The package produced pin-macro redefinition warnings from its own Atom variant header, with no compilation errors. No vendor files were modified to suppress those warnings. These figures do not measure v1.5.0 or v1.6.0.
 
 Host-side tests in `tests/logic_test.cpp` cover 13 DCF77 calendar/DST cases, all three parity fields, the exact 23-hour boundary, button gestures/debounce and RGB status priority. Earlier development runs passed these cases. They use fixed local-time fixtures and do not validate ESP32 libc timezone behavior or electrical output. The Wi-Fi form was checked in a browser with simulated responses, including successful submission and a 390-pixel layout without horizontal overflow.
