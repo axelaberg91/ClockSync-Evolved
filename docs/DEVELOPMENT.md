@@ -40,6 +40,10 @@ Normal configuration uses the web interface. To change the compiled default sign
 - The workflow rejects tracked `secrets.h`/`secret.h`, grants its token read-only repository access, verifies the CLI archive checksum, and pins third-party actions to full commit SHAs. The board-tool cache is tied to the CLI and core versions.
 - These checks verify compilation and the existing host fixtures. They do not measure carrier timing or test physical receivers, Wi-Fi provisioning, persistence or runtime time-zone transitions on an Atom Lite.
 
+### Current CI result
+
+On **2026-10-18**, [CI run 1](https://github.com/axelaberg91/ClockSync-Evolved/actions/runs/39153258214) passed both **Logic tests** and **Atom Lite build** at commit `286c073570b0f0d0d1bd18f2e8c62869bc0599a8`. This compiled the v1.6.0 firmware in both credential configurations. It is a build/host-test result, not a physical radio or network test.
+
 ### Earlier development results
 
 The earlier v1.4.0 credential variants were compiled successfully with **M5Stack 3.3.10 / M5Atom / Huge APP** on 2026-10-17: with `secrets.h` and from a separate source copy without it. Compiler dependencies confirm that the latter does not include `secrets.h`. Those builds used approximately **1.08 MB program storage and 53,520 bytes of static RAM**. The package produced pin-macro redefinition warnings from its own Atom variant header, with no compilation errors. No vendor files were modified to suppress those warnings. These figures do not measure v1.5.0 or v1.6.0.
@@ -50,9 +54,9 @@ A physical Atom Lite, antenna, receiver and frequency/timing measurements are st
 
 The AP start/10-minute fallback, real Wi-Fi authentication, NVS persistence across power loss and AP shutdown must also be checked on a physical Atom. A successful build and simulated web responses do not verify those radio/network behaviors.
 
-The v1.5.0 English interface, deferred Wi-Fi changes and explicit Wi-Fi reset have not been rebuilt or exercised on hardware. In particular, confirm that the old network stays active after saving, that the new network is selected after restart, and that forgetting Wi-Fi opens the setup AP even when the firmware contains compiled credentials.
+At the v1.5.0 handoff, the English interface, deferred Wi-Fi changes and explicit Wi-Fi reset had not been rebuilt or exercised on hardware. Current CI covers compilation of those code paths. Physical checks still need to confirm that the old network stays active after saving, that the new network is selected after restart, and that forgetting Wi-Fi opens the setup AP even when the firmware contains compiled credentials.
 
-The v1.6.0 web time-zone changes have not been compiled or tested on hardware. The pause acknowledgement, rapid successive changes, persistence, DST transitions, unchanged holdover limit, and SNTP reconnect behavior still require verification on an Atom Lite.
+The v1.6.0 web time-zone changes compile in CI but have not been tested on hardware. The pause acknowledgement, rapid successive changes, persistence, DST transitions, unchanged holdover limit, and SNTP reconnect behavior still require verification on an Atom Lite.
 
 ## Board comparison
 
