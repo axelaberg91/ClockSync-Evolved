@@ -13,7 +13,7 @@ static const char WEB_UI[] PROGMEM = R"CLOCKSYNC(
 <title>clocksync evolved</title>
 <style>
 :root{color-scheme:light;--bg:#f4f5f6;--paper:#fff;--ink:#222b30;--muted:#68747b;--line:#dce1e5;--green:#17694b;--soft:#eaf5eb;--amber:#8a5a10;--red:#a33832}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:1020px;margin:auto;padding:32px 24px 24px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px}.brand{display:flex;align-items:center;gap:11px;font-size:21px;font-weight:720;letter-spacing:-.8px}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--ink);color:#fff}.device{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:6px 12px}.eyebrow{text-transform:uppercase;font-size:11px;letter-spacing:1.8px;font-weight:700;color:var(--muted)}h1{font-size:29px;font-weight:650;letter-spacing:-1px;line-height:1.2;margin:9px 0 23px}.layout{display:grid;grid-template-columns:1.4fr 1fr;gap:18px}.card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:25px}.hero{display:flex;flex-direction:column;justify-content:space-between;min-height:306px}.status{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;border-radius:20px;background:#f0f2ef;color:var(--muted);padding:6px 11px;font-size:12px;font-weight:650}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.status.transmitting{background:var(--soft);color:var(--green)}.status.waiting,.status.aligning{background:#fff4df;color:var(--amber)}.status.stale,.status.error{background:#ffede9;color:var(--red)}.time{font-size:clamp(42px,7vw,66px);font-weight:500;letter-spacing:-3px;line-height:1.1;font-variant-numeric:tabular-nums;margin:25px 0 3px}.date{color:var(--muted);font-size:13px}.message{font-size:13px;color:var(--muted);max-width:440px;margin:24px 0 0;min-height:39px}.actions{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}button{min-height:43px;border:1px solid var(--line);background:white;color:var(--ink);border-radius:10px;padding:10px 15px;font:inherit;font-size:13px;font-weight:650;cursor:pointer}button.primary{background:var(--ink);border-color:var(--ink);color:white}button:hover{filter:brightness(.95)}button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #8dbba8;outline-offset:3px}.section-label{font-size:14px;font-weight:650;margin:0 0 21px}.row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #edf0eb;font-size:13px}.row:last-child{border:0}.row span{color:var(--muted)}.row strong{font-weight:550;text-align:right}.freshness{grid-column:1/-1;display:flex;align-items:center;gap:28px}.freshness .copy{flex:1}.freshness p{margin:4px 0 0;font-size:13px;color:var(--muted)}.remaining{font-size:24px;letter-spacing:-.6px;font-variant-numeric:tabular-nums;white-space:nowrap}.meter{height:5px;background:#e9ede7;border-radius:10px;overflow:hidden;margin-top:16px}.meter i{display:block;background:#7cae86;width:0;height:100%;transition:width .5s}.advanced{margin-top:20px;border:1px solid var(--line);border-radius:8px;background:transparent}summary{cursor:pointer;padding:17px 20px;font-size:13px;font-weight:650}.advanced-content{padding:0 20px 20px}.fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}label{display:block;color:var(--muted);font-size:12px}select,input{width:100%;min-height:42px;padding:9px;background:#fff;color:var(--ink);border:1px solid #ccd6cc;border-radius:8px;font:inherit;font-size:13px;margin-top:5px}.advanced-note{font-size:12px;color:var(--muted)}footer{display:flex;justify-content:space-between;gap:14px;margin-top:23px;color:var(--muted);font-size:11px}a{color:inherit}#feedback{min-height:24px;margin-top:12px;font-size:12px;color:var(--green)}#feedback.error{color:var(--red)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:1020px;margin:auto;padding:32px 24px 24px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px}.brand{display:flex;align-items:center;gap:11px;font-size:21px;font-weight:720;letter-spacing:-.8px}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--ink);color:#fff}.device{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:6px 12px}.eyebrow{text-transform:uppercase;font-size:11px;letter-spacing:1.8px;font-weight:700;color:var(--muted)}h1{font-size:29px;font-weight:650;letter-spacing:-1px;line-height:1.2;margin:9px 0 23px}.layout{display:grid;grid-template-columns:1.4fr 1fr;gap:18px}.card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:25px}.hero{display:flex;flex-direction:column;justify-content:space-between;min-height:306px}.status{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;border-radius:20px;background:#f0f2ef;color:var(--muted);padding:6px 11px;font-size:12px;font-weight:650}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.status.transmitting{background:var(--soft);color:var(--green)}.status.waiting,.status.aligning,.status.configuring{background:#fff4df;color:var(--amber)}.status.stale,.status.error{background:#ffede9;color:var(--red)}.time{font-size:clamp(42px,7vw,66px);font-weight:500;letter-spacing:-3px;line-height:1.1;font-variant-numeric:tabular-nums;margin:25px 0 3px}.date{color:var(--muted);font-size:13px}.message{font-size:13px;color:var(--muted);max-width:440px;margin:24px 0 0;min-height:39px}.actions{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}button{min-height:43px;border:1px solid var(--line);background:white;color:var(--ink);border-radius:10px;padding:10px 15px;font:inherit;font-size:13px;font-weight:650;cursor:pointer}button.primary{background:var(--ink);border-color:var(--ink);color:white}button:hover{filter:brightness(.95)}button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #8dbba8;outline-offset:3px}.section-label{font-size:14px;font-weight:650;margin:0 0 21px}.row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #edf0eb;font-size:13px}.row:last-child{border:0}.row span{color:var(--muted)}.row strong{font-weight:550;text-align:right}.freshness{grid-column:1/-1;display:flex;align-items:center;gap:28px}.freshness .copy{flex:1}.freshness p{margin:4px 0 0;font-size:13px;color:var(--muted)}.remaining{font-size:24px;letter-spacing:-.6px;font-variant-numeric:tabular-nums;white-space:nowrap}.meter{height:5px;background:#e9ede7;border-radius:10px;overflow:hidden;margin-top:16px}.meter i{display:block;background:#7cae86;width:0;height:100%;transition:width .5s}.advanced{margin-top:20px;border:1px solid var(--line);border-radius:8px;background:transparent}summary{cursor:pointer;padding:17px 20px;font-size:13px;font-weight:650}.advanced-content{padding:0 20px 20px}.fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}label{display:block;color:var(--muted);font-size:12px}select,input{width:100%;min-height:42px;padding:9px;background:#fff;color:var(--ink);border:1px solid #ccd6cc;border-radius:8px;font:inherit;font-size:13px;margin-top:5px}.advanced-note{font-size:12px;color:var(--muted)}footer{display:flex;justify-content:space-between;gap:14px;margin-top:23px;color:var(--muted);font-size:11px}a{color:inherit}#feedback{min-height:24px;margin-top:12px;font-size:12px;color:var(--green)}#feedback.error{color:var(--red)}
 .wifi-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.wifi-status{margin-bottom:18px}.wifi-status strong{overflow-wrap:anywhere}.checkbox{display:flex;align-items:center;gap:8px;margin-top:12px}.checkbox input{width:auto;min-height:0;margin:0}.danger{color:var(--red)}#wifiFeedback{min-height:24px;margin:14px 0 0;font-size:12px;color:var(--muted)}#wifiFeedback.error{color:var(--red)}.forget-confirm{margin-top:18px;padding:16px;border:1px solid var(--line);border-radius:8px}.forget-confirm p{margin:0;font-size:13px}
 @media(max-width:640px){main{padding:22px 16px}header{margin-bottom:30px}.layout{grid-template-columns:1fr}.card{padding:21px}.hero{min-height:290px}.freshness{align-items:flex-start;gap:12px;flex-direction:column}.fields{grid-template-columns:1fr 1fr}.time{font-size:58px}.device{font-size:10px}footer{flex-wrap:wrap}h1{font-size:26px}}
 @media(max-width:480px){.wifi-fields{grid-template-columns:1fr}}
@@ -31,6 +31,7 @@ static const char WEB_UI[] PROGMEM = R"CLOCKSYNC(
 </section>
 <section class="card" aria-label="Connection and radio signal"><h2 class="section-label">Connection &amp; signal</h2>
 <div class="row"><span>Time signal</span><strong id="station">—</strong></div>
+<div class="row"><span>Time zone</span><strong id="timeZone">—</strong></div>
 <div class="row"><span>Carrier</span><strong id="frequency">—</strong></div>
 <div class="row"><span>Wi-Fi</span><strong id="wifi">—</strong></div>
 <div class="row"><span>Last sync</span><strong id="lastSync">—</strong></div>
@@ -40,14 +41,15 @@ static const char WEB_UI[] PROGMEM = R"CLOCKSYNC(
 <section class="card freshness" aria-label="Time validity"><div class="copy"><h2 class="section-label" style="margin-bottom:4px">Time remaining without a new sync</h2><p>Transmission stops automatically after 23 hours without a confirmed time sync.</p><div class="meter" aria-hidden="true"><i id="meter"></i></div></div><div class="remaining" id="remaining">—</div></section>
 </div>
 <div id="feedback" role="status" aria-live="polite"></div>
-<details class="advanced"><summary>Radio settings</summary><div class="advanced-content"><form id="settings">
+<details class="advanced" id="radioSettings"><summary>Radio settings</summary><div class="advanced-content"><form id="settings">
 <div class="fields">
 <label>Time signal<select name="station" id="settingStation"><option value="3">DCF77 · Germany</option><option value="0">JJY · 40 kHz</option><option value="1">JJY · 60 kHz</option><option value="2">WWVB · USA</option><option value="5">MSF · United Kingdom</option><option value="4">BSF · Taiwan</option><option value="6">BPC · China</option></select></label>
+<label>Time zone<select name="timezone" id="settingTimeZone" required disabled><option value="">Open Radio settings to load time zones</option></select></label>
 <label>Antenna pin<select name="pin" id="settingPin"><option>19</option><option>21</option><option>22</option><option>23</option><option>25</option><option>26</option><option>32</option><option>33</option></select></label>
 <label>Drive strength<select name="drive" id="settingDrive"><option value="0">0 · Minimum</option><option value="1">1 · Low</option><option value="2">2 · Normal</option><option value="3">3 · Maximum</option></select></label>
 <label>Status LED<select name="led" id="settingLed"><option value="1">Show status colours</option><option value="0">Always off</option></select></label>
 <label>Daylight saving flag<select name="dst" id="settingDst"><option value="2">Automatic</option><option value="0">Force standard time</option><option value="1">Force daylight saving time</option></select></label>
-</div><p class="advanced-note">Default: DCF77 and Central European time. Other signals may require a different time zone in the firmware. Always use a series resistor with the antenna.</p>
+</div><p class="advanced-note">Signal and time zone are separate settings. Default: DCF77 and Central Europe. A time-zone change takes effect without restarting; transmission restarts at the next whole minute unless paused. Always use a series resistor with the antenna.</p>
 <button type="submit" id="apply">Save radio settings</button>
 </form></div></details>
 <details class="advanced" id="wifiSettings"><summary>Wi-Fi settings</summary><div class="advanced-content">
@@ -71,18 +73,26 @@ static const char WEB_UI[] PROGMEM = R"CLOCKSYNC(
 var current=null,receivedAt=0,timer=null,busy=false,loading=false,dirty=false,loadedSettings=false,failures=0;
 var clockTimer=null,clockSampleMs=NaN;
 var wifiToken='',wifiLoading=false,wifiDirty=false,wifiCanEdit=false;
+var timeZoneOptionsLoaded=false,timeZoneLoading=false;
 var dateFormat=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',weekday:'long',day:'numeric',month:'long',year:'numeric'});
 var el=function(id){return document.getElementById(id);};
-var labels={transmitting:'Transmitting',paused:'Paused',waiting:'Waiting for time',stale:'Stopped – time expired',aligning:'Preparing transmission',error:'Transmitter could not start'};
+var labels={transmitting:'Transmitting',paused:'Paused',waiting:'Waiting for time',stale:'Stopped – time expired',aligning:'Preparing transmission',configuring:'Applying time zone',error:'Transmitter could not start'};
 var descriptions={
 transmitting:'Sending the time signal to nearby clocks.',
 paused:'Transmission is paused. Time synchronisation continues in the background.',
 waiting:'Transmission starts at the next full minute after a confirmed time sync.',
 stale:'The last confirmed time sync has expired. Transmission resumes after a new time sync.',
 aligning:'Time is valid. Waiting for the next full minute to send a complete time message.',
+configuring:'Transmission is stopped while the new time zone is applied.',
 error:'Transmission is stopped because the radio signal could not start. See technical status.'};
 function feedback(text,error){el('feedback').textContent=text;el('feedback').className=error?'error':'';}
-function controls(){el('toggle').disabled=busy||!current||failures>0;el('sync').disabled=busy||!current||failures>0;el('apply').disabled=busy||!current||failures>0;wifiControls();}
+function controls(){
+var unavailable=busy||!current||failures>0;
+el('toggle').disabled=unavailable;el('sync').disabled=unavailable;
+el('apply').disabled=unavailable||!timeZoneOptionsLoaded||timeZoneLoading||(current.timeZonePending&&!current.timeZoneError);
+el('settingTimeZone').disabled=unavailable||!timeZoneOptionsLoaded||timeZoneLoading;
+wifiControls();
+}
 function countdown(seconds){seconds=Math.max(0,Math.floor(seconds));return Math.floor(seconds/3600)+' h '+String(Math.floor(seconds%3600/60)).padStart(2,'0')+' min';}
 function paintClock(){
 clearTimeout(clockTimer);
@@ -102,6 +112,7 @@ if(performance.now()-receivedAt>10000){el('connection').textContent='Status dela
 clockTimer=setTimeout(paintClock,Number.isFinite(clockMs)?1000-(clockMs%1000)+5:1000);
 }
 function show(s){
+var wasChanging=current&&current.timeZonePending;
 current=s;receivedAt=performance.now();failures=0;
 // Keep the fractional second; dropping it on every poll makes the display stutter.
 clockSampleMs=s.localTime?Date.parse(s.localTime.replace(' ','T')+'Z')+(s.localMilliseconds||0):NaN;
@@ -112,10 +123,12 @@ if(s.state==='transmitting'&&!s.led)el('description').textContent='Sending the t
 else if(s.state==='transmitting'&&!s.wifi)el('description').textContent='Transmitting using the last synced time. Wi-Fi is disconnected; transmission stops when the time sync is 23 hours old.';
 else if(s.state==='transmitting'&&s.ledState==='yellow')el('description').textContent='Transmitting using the last synced time. A new time sync is taking longer than expected.';
 if(s.state==='paused'&&!s.ntp)el('description').textContent='Transmission and automatic time sync are disabled.';
+if(s.timeZoneError)el('description').textContent='The time zone could not be applied. Save radio settings again to retry. Transmission remains stopped.';
 var lightLabels={off:'Off',green:'Green',yellow:'Yellow · waiting for time sync',red:'Red · Wi-Fi disconnected',stopped:'Blinking red · transmission stopped'};
 el('ledStatus').textContent=lightLabels[s.ledState]||(!s.led?'Off':'—');
 el('toggle').textContent=s.requested?'Pause transmission':'Resume transmission';
 el('station').textContent=s.stationName;
+el('timeZone').textContent=s.timeZoneName+(s.timeZoneError?' · could not apply':s.timeZonePending?' · changing':'');
 var hz=s.frequency||s.targetFrequency;
 el('frequency').textContent=(hz/1000).toLocaleString('en-GB',{maximumFractionDigits:1})+' kHz'+(!s.frequency?' · planned':'');
 el('wifi').textContent=s.wifi?'Connected':'Disconnected';
@@ -126,7 +139,10 @@ el('connection').textContent='';
 if(!loadedSettings||!dirty){
 ['Station','Pin','Drive','Dst'].forEach(function(k){el('setting'+k).value=String(s[k.toLowerCase()]);});
 el('settingLed').value=s.led?'1':'0';loadedSettings=true;
+if(timeZoneOptionsLoaded)el('settingTimeZone').value=s.timeZone;
 }
+if(s.timeZoneError)feedback('Could not apply the time zone. Save radio settings again to retry.',true);
+else if(wasChanging&&!s.timeZonePending)feedback('Time zone updated. Radio settings saved.');
 paintClock();controls();
 }
 function api(url,options){
@@ -158,11 +174,25 @@ return api('/cmd',{method:'POST',headers:{'Content-Type':'application/x-www-form
 el('toggle').addEventListener('click',function(){if(current)command(current.requested?'e0':'e1');});
 el('sync').addEventListener('click',function(){command('u');});
 el('settings').addEventListener('input',function(){dirty=true;});
+function loadTimeZones(){
+if(timeZoneOptionsLoaded||timeZoneLoading)return;
+timeZoneLoading=true;controls();
+api('/api/timezones').then(function(r){return r.json();}).then(function(zones){
+if(!Array.isArray(zones)||!zones.length)throw new Error('No time zones available.');
+var select=el('settingTimeZone');select.replaceChildren();
+zones.forEach(function(zone){var option=document.createElement('option');option.value=zone.id;option.textContent=zone.name;select.appendChild(option);});
+timeZoneOptionsLoaded=true;if(current)select.value=current.timeZone;
+}).catch(function(){feedback('Could not load time zones. Close and reopen Radio settings to retry.',true);})
+.finally(function(){timeZoneLoading=false;controls();});
+}
+el('radioSettings').addEventListener('toggle',function(){if(this.open)loadTimeZones();});
 el('settings').addEventListener('submit',function(ev){
-ev.preventDefault();if(busy)return;busy=true;controls();feedback('');
+ev.preventDefault();if(busy||!current||!timeZoneOptionsLoaded||timeZoneLoading||failures>0)return;
+// Capture the selected zone before controls() disables its input during the request.
 var form=new URLSearchParams(new FormData(ev.target));
+busy=true;controls();feedback('');
 api('/api/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()})
-.then(function(r){return r.json();}).then(function(s){dirty=false;show(s);feedback('Radio settings saved.');})
+.then(function(r){return r.json();}).then(function(s){dirty=false;show(s);feedback(s.timeZonePending?'Radio settings saved. Applying time zone…':'Radio settings saved.');})
 .catch(function(){feedback('Could not save settings. Check the connection.',true);})
 .finally(function(){busy=false;controls();schedule();});
 });

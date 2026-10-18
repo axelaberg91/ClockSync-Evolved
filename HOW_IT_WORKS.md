@@ -28,6 +28,14 @@ The radio task owns encoder buffers and calendar state. Web status uses separate
 
 Only the SNTP notification callback records time trust. Its age is measured with `esp_timer_get_time()`; Wi-Fi state and manual clock edits cannot refresh it. At 23 hours since the last confirmed reply, or before the first reply after boot, the carrier is stopped and the GPIO is set to input. A user pause is kept separate from this eligibility check. The RGB LED reports Wi-Fi/time health and actual transmission eligibility, not modulation pulses. Green means normal transmission, yellow means waiting/alignment or a sync age of at least 3 h 15 min, red means Wi-Fi is disconnected, and blinking red means time expiry or a radio error stopped transmission. User pause and the LED-off setting take precedence. The core RGB/RMT driver updates only when the visible color changes.
 
+### Runtime time-zone configuration
+
+`time_zones.h` defines a bounded list of POSIX presets. Preferences stores a stable preset ID under `tzid`; missing or unknown IDs fall back to Central Europe. `/api/timezones` supplies display choices once when the web radio settings are opened, and `/api/settings` validates the selected ID with the other radio fields. Older clients may omit the new field.
+
+A time-zone change queues a revision in the shared control snapshot. The radio task stops the carrier, skips all frame encoding, and publishes a pause acknowledgement with that revision. Only after a matching acknowledgement does the main loop call `setenv("TZ", ...)` and `tzset()`. It then releases the configuration pause; the radio task waits for the next whole minute before producing a new frame. Revision matching prevents an acknowledgement for an earlier request from authorizing a later zone change. The user pause is independent, and no part of this path records an NTP reply or extends time trust.
+
+The radio task never changes libc's time zone. HTTP status and manual calendar commands run in the same main loop as the zone change; manual calendar commands are rejected while a zone change is pending. SNTP is configured through the `esp_sntp_*` API instead of `configTzTime()`, so Wi-Fi reconnects and sync requests cannot overwrite the saved zone while an encoder is running. If applying a rule fails, the configuration pause remains in place until a settings retry or reboot. JSON and text status distinguish the saved selection from the active zone.
+
 ---
 
 ## WWVB Implementation Logic: `txtempus` vs. `nisejjy`
@@ -42,7 +50,7 @@ The original `nisejjy` implementation (and many simple Arduino emulators) often 
 ### The Solution (`txtempus` / `clocksync`)
 `clocksync` adopts the `txtempus` philosophy:
 1.  **UTC Base**: The framing bits (Minute, Hour, Day, Year) are populated using `gmtime()` (UTC).
-2.  **DST Flags**: Bit 57 ("DST Tomorrow") and Bit 58 ("DST Now") are derived from the POSIX TZ setting via `localtime_r()`. For correct WWVB operation, `#define TZ` must be set to a US timezone (e.g., `"PST8PDT,M3.2.0,M11.1.0"`).
+2.  **DST Flags**: Bit 57 ("DST Tomorrow") and Bit 58 ("DST Now") are derived from the selected POSIX time-zone rule via `localtime_r()`. Choose a US time zone under **Radio settings → Time zone**, matching the receiver's DST rules (for example, US Pacific).
 3. **Scope**: This describes the retained upstream WWVB implementation. Only DCF77 has been reviewed in this fork; this is not a complete reproduction of a national time service.
 
 > **Reference**: [github.com/hzeller/txtempus](https://github.com/hzeller/txtempus)
