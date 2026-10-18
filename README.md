@@ -209,7 +209,7 @@ The standard DevKit hardware configuration has not been verified by this project
 
 DCF77 is the main development target; the other encoders are retained from upstream and have not received the same review. This fork does not generate DCF77 leap-second announcements or leap-second frames.
 
-The v1.6.0 time-zone changes have not been compiled or tested on an Atom Lite. Earlier build results do not verify this revision or its emitted signal. See the [development and verification record](docs/DEVELOPMENT.md#verification-record-and-limits) for details.
+Automated checks compile the Atom Lite firmware and run the existing host logic tests. Runtime time-zone changes and the emitted signal still require validation on a physical Atom Lite. See the [development and verification record](docs/DEVELOPMENT.md#verification-record-and-limits) for results and limits.
 
 ## Documentation
 
