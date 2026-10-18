@@ -71,31 +71,15 @@ The web interface's **Wi-Fi settings** can save a new network for the next start
 For another clock protocol, see [Changing the time signal and time zone](#changing-the-time-signal-and-time-zone).
 
 <details>
-<summary>Installation and Wi-Fi setup</summary>
+<summary>Board package and Wi-Fi setup</summary>
 
-1. **Wi-Fi setup**:
-    * With no saved network and no `secrets.h`, the device immediately starts the AP **clocksync**, password **clocksync**. Connect to it and open `http://192.168.4.1` (a captive portal may also open automatically).
-    * Enter the target 2.4 GHz SSID and PSK. The previous stored network is kept until the new connection succeeds. A successful network is saved as one NVS record and survives reboot.
-    * To prepare a network change in advance, open **Wi-Fi settings** on the normal status page. Enter the target SSID and password, then choose **Save for next startup**. The current network remains connected, including when it needs to reconnect before restart. New credentials are saved without testing them; they are first used after a restart. The existing 10-minute AP fallback applies if the new connection fails.
-    * **Forget Wi-Fi** asks for confirmation, clears the saved network, and makes the next startup open **clocksync** immediately. It does not restart or disconnect the device. This explicit reset suppresses compiled `secrets.h` credentials and stays in effect across restarts until a new network is saved through the setup portal or normal Wi-Fi settings.
-    * The setup AP closes about 15 seconds after a confirmed connection. Rejoin your normal Wi-Fi and open `http://clocksync.local` or the IP shown on the setup page/serial monitor.
-    * After **10 minutes of continuous Wi-Fi disconnection**, setup AP mode starts automatically while station reconnect attempts continue every 60 seconds. This also recovers from a changed SSID/password. A short disconnection that recovers resets the 10-minute timer.
-    * Boot priority: **explicit Wi-Fi reset**, saved configuration, optional compiled `secrets.h`, then setup AP. To compile credentials, copy `secrets_example.h` to `secrets.h` and fill in the two defines. The secrets file is ignored by Git and is optional. Forgetting Wi-Fi does not remove credentials embedded in the firmware; it prevents their use at startup.
-    * Wi-Fi passwords are never returned by the APIs. Network names are shown so you can distinguish the current and next-startup settings. The transmit guard is independent: setup AP mode does not validate time or reset the 23-hour limit.
-2. **Dependencies & Upload**:
-    * Target: **M5Stack by M5Stack official 3.3.10**, board **M5Atom** (the classic Atom Lite, not AtomS3).
-    * Add `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json` under Additional Board Manager URLs. Install version **3.3.10** and select **Tools → Board → M5Stack → M5Atom**.
-    * Use **Huge APP (3MB No OTA/1MB SPIFFS)** with the Atom Lite's **4 MB** flash. No external Arduino libraries are required.
-    * From the directory containing the project:
+Add `https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json` under **Additional Board Manager URLs** in Arduino IDE. Install **M5Stack by M5Stack official 3.3.10**, select **M5Atom** (not AtomS3), and use the settings above. [Command-line build instructions](docs/DEVELOPMENT.md#building-from-the-command-line) are available separately.
 
-        ```bash
-        arduino-cli core update-index --additional-urls https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
-        arduino-cli core install m5stack:esp32@3.3.10 --additional-urls https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
-        arduino-cli compile --fqbn m5stack:esp32:m5stack_atom:PartitionScheme=huge_app clocksync
-        arduino-cli upload -p COM_PORT --fqbn m5stack:esp32:m5stack_atom:PartitionScheme=huge_app clocksync
-        ```
-
-    * The older Espressif 2.0.17 build is a historical compatibility result. The current target and configuration instructions above use M5Stack 3.3.10.
+- With no saved network and no `secrets.h`, join **clocksync**, password **clocksync**, then open `http://192.168.4.1`. A captive portal may also open automatically.
+- Enter a 2.4 GHz SSID and password. Setup saves the network only after a successful connection and closes about 15 seconds later. Rejoin that network and open `http://clocksync.local` or the device IP.
+- To prepare a network change, open **Wi-Fi settings** and choose **Save for next startup**. The current connection stays active. New credentials are first tried after a restart.
+- **Forget Wi-Fi** opens setup at the next startup, even when credentials were compiled into the firmware. It does not disconnect or restart the current session.
+- After **10 minutes of continuous Wi-Fi disconnection**, setup becomes available while reconnect attempts continue. A recovered connection resets that timer. Wi-Fi recovery cannot extend the 23-hour time-sync limit.
 
 </details>
 
@@ -132,22 +116,20 @@ The selected time zone controls the web page's local clock and the local-time en
 <details>
 <summary>US time-zone examples for WWVB</summary>
 
-| Region | Web selection | POSIX rule used internally |
-| --- | --- | --- |
-| Pacific / Los Angeles | US Pacific (PST/PDT) | `PST8PDT,M3.2.0/2,M11.1.0/2` |
-| Mountain / Denver | US Mountain (MST/MDT) | `MST7MDT,M3.2.0/2,M11.1.0/2` |
-| Central / Chicago | US Central (CST/CDT) | `CST6CDT,M3.2.0/2,M11.1.0/2` |
-| Eastern / New York | US Eastern (EST/EDT) | `EST5EDT,M3.2.0/2,M11.1.0/2` |
-| Phoenix / most of Arizona, without DST | Arizona (MST, no DST) | `MST7` |
-| Hawaii, without DST | Hawaii (HST, no DST) | `HST10` |
+| Region | Web selection |
+| --- | --- |
+| Pacific / Los Angeles | US Pacific (PST/PDT) |
+| Mountain / Denver | US Mountain (MST/MDT) |
+| Central / Chicago | US Central (CST/CDT) |
+| Eastern / New York | US Eastern (EST/EDT) |
+| Phoenix / most of Arizona, without DST | Arizona (MST, no DST) |
+| Hawaii, without DST | Hawaii (HST, no DST) |
 
 </details>
 
 The web setting **Daylight saving flag** overrides the DCF77/MSF flag; it does not change the time zone or adjust the encoded hour. Leave it on **Automatic** for normal operation. WWVB derives its flags from the selected time zone independently of that override. **UTC (no DST)** is also available for diagnostic use.
 
-The preset list and its POSIX rules are defined in `time_zones.h`. The web page loads this list once when Radio settings is first opened, rather than polling the full list. Only known preset IDs are accepted; custom POSIX strings are not accepted through the web API. See [Espressif's time-zone documentation](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/system_time.html#timezones) for the underlying rule format.
-
-To change the compiled default signal as well, replace the existing `SN_DEFAULT` definition in `clocksync.ino`, for example `#define SN_DEFAULT (SN_JJY_E)`. A previously saved station takes precedence over this default; select the intended signal in the web interface on an already configured device.
+Advanced preset and default changes are covered in the [development notes](docs/DEVELOPMENT.md#defaults-and-time-zone-presets).
 
 <details>
 <summary>Button, status LED, saved settings and NTP timing</summary>
@@ -163,61 +145,7 @@ After a confirmed NTP sync, transmission starts at the next whole minute so the 
 
 </details>
 
-<details>
-<summary>Commands, HTTP endpoints and supported stations</summary>
-
-Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksync.local/cmd?c=<command>`).
-
-| Command | Description | Example |
-| :--- | :--- | :--- |
-| **Stations** | | |
-| `sj` | Set station to **JJY (40 kHz)** (Fukushima) | `sj` |
-| `sk` | Set station to **JJY (60 kHz)** (Fukuoka) | `sk` |
-| `sw` | Set station to **WWVB (60 kHz)** (USA) | `sw` |
-| `sd` | Set station to **DCF77 (77.5 kHz)** (Germany) | `sd` |
-| `sm` | Set station to **MSF (60 kHz)** (UK) | `sm` |
-| `st` | Set station to **BSF (77.5 kHz)** (Taiwan) | `st` |
-| `sc` | Set station to **BPC (68.5 kHz)** (China) | `sc` |
-| **Control** | | |
-| `e1` / `e0` | **Enable / Disable Transmission** (Carrier & Logic) | `e1` |
-| `pNN` | Set Radio Output Pin (GPIO `NN`) | `p25` |
-| `g0` - `g3` | Set Drive Strength (0=Weakest, 3=Strongest) | `g2` |
-| **Settings** | | |
-| `y1` / `y0` | NTP Sync On / Off (23-hour guard still applies) | `y1` |
-| `u` | Request a fresh NTP sync and enable NTP | `u` |
-| `l1` / `l0` | LED On / Off | `l1` |
-| `x0` - `x2` | DCF/MSF DST Override (0=Std, 1=DST, 2=Auto) | `x2` |
-| **Manual Time** | | |
-| `dYYMMDD` | Set Date; invalidates time trust until a new NTP reply | `d231225` |
-| `tHHmmSS` | Set Time; invalidates time trust until a new NTP reply | `t123000` |
-| **Debug** | | |
-| `h` | Show Help | `h` |
-| `f` | Frequency Self-Test (Requires jumper `PIN_RADIO` -> `PIN_MEAS`) | `f` |
-| `r` | Restore default settings and request NTP sync | `r` |
-
-### HTTP endpoints
-
-- `GET /`: web interface stored in flash, with no external assets.
-- `GET /api/status`: JSON status, including requested/actual transmission, NTP age and holdover remaining.
-- `GET /status.txt`: diagnostic text (including actual configured carrier frequency).
-- `POST /cmd`: form field `c` with a command above. Legacy `GET /cmd?c=...` is also accepted.
-- `POST /api/settings`: form fields `station`, `pin`, `drive`, `led`, `dst`, and `timezone` (a preset ID from `/api/timezones`). Invalid values are rejected together. Older clients may omit `timezone` to keep the current selection. Status includes selected/active zone IDs, the active rule, and pending/error flags.
-- `GET /api/timezones`: the supported time-zone IDs and display names; loaded once per page when Radio settings is first opened.
-- `GET /api/wifi`: setup status and CSRF token, available only through the setup AP interface; never returns the PSK.
-- `POST /api/wifi`: form fields `ssid`, `psk`, `token` from the setup AP. Starts a nonblocking station connection and saves only after success.
-
-## Supported Stations
-
-| Station | Freq (kHz) | Location | Notes |
-| :--- | :--- | :--- | :--- |
-| **JJY** | 40 / 60 | Japan | Default is end-Low symbol shape. |
-| **WWVB** | 60 | USA | UTC framing; DST bits derived from TZ setting. |
-| **DCF77** | 77.5 | Germany | "Start-Low" encoding. |
-| **MSF** | 60 | UK | Includes parity and DST bits. |
-| **BSF** | 77.5 | Taiwan | Quaternary encoding (uncertified). |
-| **BPC** | 68.5 | China | Quaternary encoding (uncertified). |
-
-</details>
+For Serial commands, HTTP endpoints and protocol details, see [the technical reference](HOW_IT_WORKS.md#commands-and-http-api).
 
 <details>
 <summary>Troubleshooting</summary>
@@ -225,7 +153,7 @@ Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksy
 *   **Clock isn't syncing**:
     *   **Proximity**: Move the clock *closer* to the antenna. It usually needs to be touching.
     *   **Interference**: LED power supplies and monitors cause noise. Move away from them.
-    *   **Volume**: Increase "Volume" (Drive Strength) to `g3` using the Serial/Web command.
+    *   **Drive strength**: Increase **Radio settings → Drive strength** if needed.
     *   **Antenna**: Ensure your antenna wire isn't broken and the resistor is secure.
 *   **Clock shows wrong time**:
     *   **Timezone**: Check **Radio settings → Time zone**, then choose **Save radio settings**. See [Changing the time signal and time zone](#changing-the-time-signal-and-time-zone), including the WWVB-specific notes.
@@ -242,20 +170,7 @@ Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksy
 
 The **classic M5Stack Atom Lite** is the development and build target. Other boards require adaptation to their actual hardware. A standard DevKit configuration has not been verified by this project.
 
-### Atom Lite versus a standard ESP32 DevKit
-
-Here, "standard ESP32" means a classic, dual-core ESP32 DevKit/WROOM board. ESP32-S3, C3 and other chip families need their own review.
-
-| Item | Atom Lite | Standard ESP32 DevKit |
-| :--- | :--- | :--- |
-| Board selection | **M5Atom** in M5Stack's package | Usually **ESP32 Dev Module** in Espressif's package; match the actual board |
-| Processor | ESP32-PICO-D4, dual core, up to 240 MHz | Classic ESP32/WROOM uses the same processor architecture and LEDC peripheral |
-| DCF77 and NTP logic | This project's normal implementation | The protocol, 23-hour guard and 77,500 Hz carrier request need no board-specific changes |
-| Antenna output | GPIO32 on the Grove connector's white wire, through the coil and series resistor to GND | GPIO32 can be used if it is exposed and free; wire to the labeled GPIO, not a connector position |
-| Status LED | Addressable RGB LED on GPIO27 via the core RGB driver (`PIN_RGB_LED`) | Set `PIN_RGB_LED` to a suitable addressable LED pin, or `-1`. For a simple LED, set `PIN_LED` and check its polarity |
-| Button | Active-low button on GPIO39 (`PIN_BUTTON`), external pull-up on Atom Lite, 10 ms software debounce | Set `PIN_BUTTON` to the connected button pin or `-1` to disable it. GPIO34–39 require an external pull-up. BOOT is not automatically the application control button |
-| Flash | 4 MB; use a partition scheme for 4 MB flash | Match the actual flash size, flash mode and partition layout; PSRAM is not required |
-| Hardware initialization | Core GPIO/RGB functions; no M5Atom library | Adjust the LED/button pin definitions. Changing the board menu does not add missing physical hardware |
+For a classic dual-core ESP32 DevKit, review the following settings. A [detailed board comparison](docs/DEVELOPMENT.md#board-comparison) is available in the development notes.
 
 ### What to change
 
@@ -290,92 +205,18 @@ The standard DevKit hardware configuration has not been verified by this project
 
 </details>
 
-## More details
+## Limits and verification
 
-<details>
-<summary>Features, release notes and source history</summary>
+DCF77 is the main development target; the other encoders are retained from upstream and have not received the same review. This fork does not generate DCF77 leap-second announcements or leap-second frames.
 
-### Features
+The v1.6.0 time-zone changes have not been compiled or tested on an Atom Lite. Earlier build results do not verify this revision or its emitted signal. See the [development and verification record](docs/DEVELOPMENT.md#verification-record-and-limits) for details.
 
-- **Multi-Station Support**: Emulates JJY (Japan), WWVB (USA), DCF77 (Germany), MSF (UK), BSF (Taiwan), and BPC (China).
-- **Web Control**: Simple web interface for status monitoring and configuration.
-- **Home Assistant Integration**: REST API for scheduling transmission (e.g., run only at night).
-- **Signal Timing**: Hardware LEDC generates the carrier. A dedicated radio task applies modulation from absolute wall-clock time, independently of web requests.
+## Documentation
 
-### Source history
-
-- [upstream-baseline](https://github.com/axelaberg91/ClockSync-Evolved/tree/upstream-baseline) preserves the original fork snapshot from `tanvach/clocksync`, commit `63d92cae27f5085cbd8474151474e6ea8660a867` (v1.3.1), before the changes credited to axelaberg91.
-- [v1.5.0](https://github.com/axelaberg91/ClockSync-Evolved/tree/v1.5.0) preserves the v1.5.0 firmware snapshot. The default `master` branch contains the current fork code, with the original Git history retained.
-- Local Wi-Fi credentials (`secrets.h` or `secret.h`) and compiled firmware files are excluded from version control. Use `secrets_example.h` as a template or configure Wi-Fi through the setup portal.
-
-### What's New in v1.6.0
-
-- A **Time zone** selector in Radio settings saves a preset across restarts. Signal and zone remain independent choices.
-- A time-zone change waits for the radio task to stop before changing libc's local-time rules. Transmission restarts at the next whole minute when eligible; a manual pause stays paused and the 23-hour guard is unchanged.
-- NTP setup no longer rewrites the time zone during reconnects or sync requests. The status page shows the active zone, with selected/active IDs and pending/error details in the API and technical status.
-- The README explains changing signals and time zones, including WWVB's UTC frame and receiver DST settings.
-
-### What's New in v1.5.0
-
-- The status interface, setup portal and device messages use English. The local clock keeps Central European time and now retains fractional seconds when refreshing its display.
-- The normal web interface has **Wi-Fi settings**. **Save for next startup** stores a new SSID/password without changing the current connection or its reconnect settings. Credentials are first tried after restarting the device.
-- **Forget Wi-Fi** clears the saved network after confirmation and makes the next startup open the setup AP. The reset also overrides compiled `secrets.h` credentials until a new network is saved; the current connection stays active until restart.
-- Current and next-startup networks are shown separately. Saved passwords are never returned to the browser. The healthy-connection footer text has been removed.
-- Status LEDs use distinct green, yellow and red channel values at low brightness.
-
-### What's New in v1.4.0
-
-- DCF77 uses a 77,500 Hz carrier request with 8-bit LEDC PWM. Technical status shows the actual configured frequency, which may differ slightly because of the hardware divider.
-- The DCF77 frame carries the following minute, including date rollover, Sunday = 7, DST flags and the A1 change announcement.
-- Transmission requires a confirmed SNTP reply after every boot. It stops after 23 hours without a new reply; Wi-Fi connectivity alone does not reset this limit.
-- Wi-Fi reconnect attempts continue every 60 seconds. Network operations and HTTP run separately from the radio task.
-- Short button press pauses/resumes the requested transmission state. Hold for 3 seconds to request time sync; release does not also toggle transmission.
-- Status LED: green for normal transmission, yellow while waiting for NTP/frame alignment or after 3 h 15 min without a confirmed sync, red for disconnected Wi-Fi, blinking red for expired time or a radio error. A user pause or disabling the LED turns it off.
-- A compact Swedish web interface shows transmitter status, connection, last confirmed sync, LED state and time remaining, with mobile layout and advanced settings.
-- Built-in Wi-Fi provisioning: AP SSID/password `clocksync`, immediate when unconfigured or after 10 minutes of continuous Wi-Fi loss. A successful setup is stored in NVS and overrides compiled credentials.
-- Target build: M5Stack board package 3.3.10, board M5Atom. RGB and debounced button control use the ESP32 core directly; no external M5Atom/FastLED libraries are required.
-
-### What's New in v1.3.1
-
-- **Prevent NVS flash wear**: Added `WiFi.persistent(false)` to stop the WiFi library from writing credentials to flash on every connect/disconnect cycle.
-- **Buzzer default off**: Buzzer now defaults to off on fresh install and reset.
-- **Tristate radio pin when TX off**: Radio output pin is now set to high-impedance (INPUT) when TX is disabled or when switching pins, instead of being driven LOW.
-
-### What's New in v1.3
-
-- **Fix WWVB DST bits**: Changed default TZ from `"UTC0"` to `"PST8PDT,M3.2.0,M11.1.0"`. With `"UTC0"`, DST status bits were always 0, causing clocks to stay on standard time after DST started. Updated documentation and status display to clarify that WWVB DST bits are derived from the TZ setting.
-- **Remove dead `q` command**: Removed unused `q0/q1/q2` WWVB pending override command and related dead code (`wwvbPendingOverride`, `getWWVBPendFlag`).
-
-</details>
-
-<details>
-<summary>CAD sources and hardware checks</summary>
-
-- [Coil OpenSCAD](hardware/coil/coil-75mm-integrated-holder.scad) · [connector clip OpenSCAD](hardware/connector/dupont-housing-clip.scad).
-- [Coil geometry report](hardware/coil/geometry-checks.json) · [connector geometry report](hardware/connector/geometry-checks.json).
-- The coil and clip are each one closed connected mesh. STL geometry matches the delivered designs. The combined plate was sliced in PrusaSlicer 2.9.6 without support or stability warnings.
-- CAD has some fixed coordinates: recheck fit and slicing after editing dimensions.
-
-</details>
-
-<details>
-<summary>Firmware verification and limits</summary>
-
-The earlier v1.4.0 credential variants were compiled successfully with **M5Stack 3.3.10 / M5Atom / Huge APP** on 2026-10-17: with `secrets.h` and from a separate source copy without it. Compiler dependencies confirm that the latter does not include `secrets.h`. Those builds used approximately **1.08 MB program storage and 53,520 bytes of static RAM**. The package produced pin-macro redefinition warnings from its own Atom variant header, with no compilation errors. No vendor files were modified to suppress those warnings. These figures do not measure the current v1.5.0 revision.
-
-Host-side tests in `tests/logic_test.cpp` cover 13 DCF77 calendar/DST cases, all three parity fields, the exact 23-hour boundary, button gestures/debounce and RGB status priority. They all pass. They use fixed local-time fixtures and do not validate ESP32 libc timezone behavior or electrical output. The Wi-Fi form was checked in a browser with simulated responses, including successful submission and a 390-pixel layout without horizontal overflow.
-
-A physical Atom Lite, antenna, receiver and frequency/timing measurements are still required to verify the emitted signal and operation under Wi-Fi/web load. This fork does not generate DCF77 leap-second announcements or leap-second frames. Other station encoders are retained from upstream and have not received the same review as DCF77.
-
-The AP start/10-minute fallback, real Wi-Fi authentication, NVS persistence across power loss and AP shutdown must also be checked on a physical Atom. A successful build and simulated web responses do not verify those radio/network behaviors.
-
-The v1.5.0 English interface, deferred Wi-Fi changes and explicit Wi-Fi reset have not been rebuilt or exercised on hardware. In particular, confirm that the old network stays active after saving, that the new network is selected after restart, and that forgetting Wi-Fi opens the setup AP even when the firmware contains compiled credentials.
-
-The v1.6.0 web time-zone changes have not been compiled or tested on hardware. The pause acknowledgement, rapid successive changes, persistence, DST transitions, unchanged holdover limit, and SNTP reconnect behavior still require verification on an Atom Lite.
-
-</details>
-
-For protocol and signal-timing details, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+- [Technical reference and API](HOW_IT_WORKS.md)
+- [Hardware, editable CAD and dimensional references](hardware/README.md)
+- [Release history](CHANGELOG.md)
+- [Development notes, build records and source history](docs/DEVELOPMENT.md)
 
 ## Credits
 
@@ -384,12 +225,3 @@ For protocol and signal-timing details, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 - **Fork improvements (v1.4.0-v1.6.0)**: [axelaberg91](https://github.com/axelaberg91/ClockSync-Evolved) - DCF77 encoding and timing fixes; confirmed-NTP and 23-hour transmission safeguards; Atom Lite button and RGB status handling; Wi-Fi setup, fallback and next-startup configuration; and the English **clocksync evolved** web interface with saved time-zone selection.
 - **Reference**: [txtempus](https://github.com/hzeller/txtempus) by Henner Zeller (used for WWVB frame verification).
 - **Printable hardware**: developed for Axel's build with Codex assistance, starting from Axel's original coil-former concept.
-
-<details>
-<summary>Dimensional references and license status</summary>
-
-Hardware references: [M5Stack Atom Lite enclosure](https://github.com/m5stack/M5_Hardware/tree/master/Products/C008_Atom-Lite/Structures), [Pololu connector housing](https://www.pololu.com/product/1900) and [Grove connector drawing](https://statics3.seeedstudio.com/images/opl/datasheet/3470130P1.pdf). Reference meshes are not included.
-
-Original fork contributions and printable hardware by axelaberg91 are licensed under **CC BY-NC 4.0**, with attribution and non-commercial use required. The rights holder may still sell their own work or grant separate commercial permission. The inherited firmware's license remains unresolved; upstream code and third-party references are not relicensed. See [LICENSE.md](LICENSE.md) and [hardware/LICENSE.md](hardware/LICENSE.md).
-
-</details>

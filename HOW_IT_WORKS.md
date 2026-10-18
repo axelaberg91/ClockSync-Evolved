@@ -267,3 +267,49 @@ The setup AP is `clocksync` with password `clocksync`, at `192.168.4.1`. It star
 The station-side interface uses `GET /api/wifi/next` to show current and next-startup network names, the pending-restart state, and a per-boot write token. `POST /api/wifi/next` validates and stores credentials for the next boot without mutating the active `ssid_`/`psk_`, calling `WiFi.begin`, or changing reconnect behavior. `POST /api/wifi/reset` stores the AP-only record with empty credentials. Both writes require the token and a connection through the station interface. They are rejected while an immediate AP provisioning candidate is still being saved, so an in-flight provisioning attempt cannot silently overwrite a deferred change. No API returns the password.
 
 The normal UI loads Wi-Fi configuration only when its section opens, keeps edits intact during background status updates, and requires a separate confirmation before forgetting Wi-Fi. Neither operation reboots the device. Restarting applies the saved configuration; an unreachable new network uses the usual 10-minute fallback. The setup portal still connects immediately and saves only after a successful connection.
+
+## Commands and HTTP API
+
+Control the device via Serial Monitor (115200 baud) or via HTTP (`http://clocksync.local/cmd?c=<command>`).
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| **Stations** | | |
+| `sj` | Set station to **JJY (40 kHz)** (Fukushima) | `sj` |
+| `sk` | Set station to **JJY (60 kHz)** (Fukuoka) | `sk` |
+| `sw` | Set station to **WWVB (60 kHz)** (USA) | `sw` |
+| `sd` | Set station to **DCF77 (77.5 kHz)** (Germany) | `sd` |
+| `sm` | Set station to **MSF (60 kHz)** (UK) | `sm` |
+| `st` | Set station to **BSF (77.5 kHz)** (Taiwan) | `st` |
+| `sc` | Set station to **BPC (68.5 kHz)** (China) | `sc` |
+| **Control** | | |
+| `e1` / `e0` | **Enable / Disable Transmission** (Carrier & Logic) | `e1` |
+| `pNN` | Set Radio Output Pin (GPIO `NN`) | `p25` |
+| `g0` - `g3` | Set Drive Strength (0=Weakest, 3=Strongest) | `g2` |
+| **Settings** | | |
+| `y1` / `y0` | NTP Sync On / Off (23-hour guard still applies) | `y1` |
+| `u` | Request a fresh NTP sync and enable NTP | `u` |
+| `l1` / `l0` | LED On / Off | `l1` |
+| `x0` - `x2` | DCF/MSF DST Override (0=Std, 1=DST, 2=Auto) | `x2` |
+| **Manual Time** | | |
+| `dYYMMDD` | Set Date; invalidates time trust until a new NTP reply | `d231225` |
+| `tHHmmSS` | Set Time; invalidates time trust until a new NTP reply | `t123000` |
+| **Debug** | | |
+| `h` | Show Help | `h` |
+| `f` | Frequency Self-Test (Requires jumper `PIN_RADIO` -> `PIN_MEAS`) | `f` |
+| `r` | Restore default settings and request NTP sync | `r` |
+
+### HTTP endpoints
+
+- `GET /`: web interface stored in flash, with no external assets.
+- `GET /api/status`: JSON status, including requested/actual transmission, NTP age and holdover remaining.
+- `GET /status.txt`: diagnostic text (including actual configured carrier frequency).
+- `POST /cmd`: form field `c` with a command above. Legacy `GET /cmd?c=...` is also accepted.
+- `POST /api/settings`: form fields `station`, `pin`, `drive`, `led`, `dst`, and `timezone` (a preset ID from `/api/timezones`). Invalid values are rejected together. Older clients may omit `timezone` to keep the current selection. Status includes selected/active zone IDs, the active rule, and pending/error flags.
+- `GET /api/timezones`: the supported time-zone IDs and display names; loaded once per page when Radio settings is first opened.
+- `GET /api/wifi`: setup status and CSRF token, available only through the setup AP interface; never returns the PSK.
+- `POST /api/wifi`: form fields `ssid`, `psk`, `token` from the setup AP. Starts a nonblocking station connection and saves only after success.
+
+- `GET /api/wifi/next`: station-side current/next network status and write token; never returns the password.
+- `POST /api/wifi/next`: `ssid`, `psk`, and `token`; save a network for the next startup.
+- `POST /api/wifi/reset`: `token`; forget Wi-Fi and open setup at the next startup. See [Wi-Fi provisioning](#wi-fi-provisioning) for interface restrictions and persistence behavior.
